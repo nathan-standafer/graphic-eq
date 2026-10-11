@@ -25,3 +25,14 @@ Needs only: Python 3, PyGObject (GTK 3, GStreamer, `gst-plugins-good`), pycairo,
 - "After EQ" reads your output's monitor, so it follows the system volume; "Before EQ" doesn't.
 - The filter graph stays running while the app is open (needed for gain changes to apply while idle).
 - Stacked boosts add up (all bands at +6 ≈ +8 dB overall); lower the system volume if it clips.
+
+## GPU version (Rust + wgpu)
+
+`gpu/` is a ground-up Rust port with a GPU-rendered display: 3D LED columns on a reflective floor, a
+scrolling waterfall terrain, HDR bloom, 4x MSAA. It holds 120 fps even in a 4800x1300 window.
+It does everything the Python app does (same EQ engine, routing, presets); settings live in
+`~/.config/graphic-eq/gpu-settings.json`.
+
+    cd gpu && cargo run --release
+
+Needs Rust (rustup) and a Vulkan-capable GPU. Pick the scene, colors, glow and more under "Display".
