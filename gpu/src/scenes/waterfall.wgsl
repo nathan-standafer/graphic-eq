@@ -1,4 +1,4 @@
-// Waterfall: spectrum history as a scrolling wireframe terrain, with a glass wall at time 0.
+// Waterfall: spectrum history as a scrolling wireframe terrain, inside glass walls at time 0 and along both sides.
 const FLOOR_EXTENT: f32 = 600.0;   // effectively infinite; fogged out long before the edge
 const TER_H: f32 = 4.4;            // terrain and glass-wall height at full scale
 
@@ -61,7 +61,7 @@ const RCELLS: u32 = 96u;
 fn glass_reflect(mirrored: vec3<f32>) -> f32 {
   let d = max(-mirrored.y, 0.0);
   let v = normalize(u.cam.xyz - vec3<f32>(mirrored.x, -mirrored.y, mirrored.z));
-  let fres = 0.06 + 0.94 * pow(1.0 - clamp(abs(v.y), 0.0, 1.0), 4.0);
+  let fres = 0.14 + 0.86 * pow(1.0 - clamp(abs(v.y), 0.0, 1.0), 3.0);
   return fres * exp(-d * 0.45) * 1.45;
 }
 // A line that widens and dims with depth below the floor, like a blurred reflection.
@@ -119,16 +119,72 @@ struct FloorOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> 
   let w = vec3<f32>(mix(-FLOOR_EXTENT, FLOOR_EXTENT, c.x), -0.004, mix(-FLOOR_EXTENT, FLOOR_EXTENT, c.y));
   return FloorOut(u.vp * vec4<f32>(w, 1.0), w);
 }
+const GRID_DEPTH: f32 = 0.7;   // the grid lies this far below the glass surface
+
+// A long light bar overhead, seen as a straight band across the glass. `t` is the tangent of the
+// reflected ray's elevation toward the far end of the floor, which is constant along a line of
+// constant depth; `half_t` is the bar's half width in that measure and `half_x` how far it extends sideways.
+fn lightbar(r: vec3<f32>, t0: f32, half_t: f32, half_x: f32) -> f32 {
+  let fz = max(-r.z, 0.05);
+  let t = r.y / fz;
+  let lx = abs(r.x) / fz;
+  return smoothstep(half_t * 2.6, half_t * 0.4, abs(t - t0)) * smoothstep(half_x + 0.8, half_x, lx);
+}
+
 @fragment fn fs_wfloor(in: FloorOut) -> @location(0) vec4<f32> {
-  // The floor stands still; the terrain scrolls over it. Lines every 1.0 in x and every 5 history
-  // rows (0.55) in z, the same pitch the terrain uses.
-  let zc = -in.wp.z / (0.11 * 5.0);
-  let gx = in.wp.x / 1.0;
-  let aa = line_aa(max(fwidth(gx), fwidth(zc)));
-  let g = max(gridline(gx), gridline(zc)) * aa;
-  let dist = length(in.wp - u.cam.xyz);
+  let to_cam = u.cam.xyz - in.wp;
+  let dist = length(to_cam);
+  let v = to_cam / dist;
+  let cosv = clamp(v.y, 0.0, 1.0);                          // 1 looking straight down onto the glass
+  let fres = 0.07 + 0.93 * pow(1.0 - cosv, 5.0);            // glass: dim reflection from above, strong when grazing
+  let dom = palette(0.25, 0.5);
   let fade = 1.0 - smoothstep(20.0, 130.0, dist);
-  var c = vec3<f32>(0.005, 0.007, 0.014) + palette(0.25, 0.5) * g * 0.40;
+
+  // The grid is under the glass: find where this view ray reaches the plane GRID_DEPTH below the
+  // surface, so the lines shift against the surface as the camera moves. Glass dims and tints them.
+  let through = GRID_DEPTH / max(v.y, 0.06);
+  let q = in.wp.xz - v.xz * through;
+  let gz = -q.y / (0.11 * 5.0);
+  let aa = line_aa(max(fwidth(q.x), fwidth(gz)));
+  let g = max(gridline(q.x), gridline(gz)) * aa;
+  let absorb = exp(-through * 0.22);
+  var c = vec3<f32>(0.004, 0.006, 0.013);
+  c += dom * g * 0.22 * (1.0 - 0.7 * fres) * absorb;
+
+  // light cast onto the glass by the lit wall: strongest right in front of it
+  let xi = u32(clamp((in.wp.x / 19.0 + 0.5) * f32(NX - 1u) + 0.5, 0.0, f32(NX - 1u)));
+  let hn = wf_h2(xi, 0u);
+  let front = max(in.wp.z, 0.0);
+  let spill = exp(-front * 0.9) * smoothstep(13.0, 9.0, abs(in.wp.x)) * select(0.0, 1.0, in.wp.z > 0.0);
+  var pool = palette(clamp(hn.x * 1.15, 0.0, 1.0), clamp(in.wp.x / 19.0 + 0.5, 0.0, 1.0)) * hn.x * hn.x;
+  if (u.mode > 0.5) { pool = STEREO_L * hn.x * hn.x + STEREO_R * hn.y * hn.y; }
+  c += pool * spill * 0.14;
+
+  // and by the side and back walls, whose edge lines light the glass beside them
+  let zr = max(-in.wp.z / ROW_DZ - u.res.z, 0.0);
+  let ex = abs(in.wp.x) - SIDE_X;
+  if (in.wp.z > -SIDE_LEN && in.wp.z < 0.5 && abs(ex) < 4.0) {
+    let side = select(0u, 1u, in.wp.x > 0.0);
+    let he = edge_h(side, zr);
+    var lit = palette(clamp(he.x * 1.15, 0.0, 1.0), 0.5) * he.x * he.x;
+    if (u.mode > 0.5) { lit = STEREO_L * he.x * he.x + STEREO_R * he.y * he.y; }
+    c += lit * exp(-abs(ex) * 1.1) * wall_fade(zr) * (1.0 - smoothstep(0.0, 0.5, in.wp.z)) * 0.12;
+  }
+  let ez = in.wp.z + SIDE_LEN;
+  if (abs(ez) < 4.0 && abs(in.wp.x) < SIDE_X + 3.0) {
+    let hb = wf_h2(u32(clamp((in.wp.x / 19.0 + 0.5) * f32(NX - 1u) + 0.5, 0.0, f32(NX - 1u))), NZ - 1u);
+    var lit = palette(clamp(hb.x * 1.15, 0.0, 1.0), 0.5) * hb.x * hb.x;
+    if (u.mode > 0.5) { lit = STEREO_L * hb.x * hb.x + STEREO_R * hb.y * hb.y; }
+    c += lit * exp(-abs(ez) * 1.1) * wall_fade(f32(NZ - 1u)) * (1.0 - smoothstep(SIDE_X, SIDE_X + 3.0, abs(in.wp.x))) * 0.12;
+  }
+
+  // what the glass mirrors of the sky: three long light bars (they slide as the view moves) and a
+  // faint glow toward the horizon
+  let r = vec3<f32>(-v.x, v.y, -v.z);
+  let boxes = 2.4 * lightbar(r, 1.35, 0.07, 3.0) + 1.8 * lightbar(r, 0.95, 0.025, 3.5) + 1.3 * lightbar(r, 0.62, 0.03, 2.5);
+  c += mix(dom, vec3<f32>(1.0), 0.3) * boxes * fres;
+  c += dom * 0.05 * pow(1.0 - cosv, 4.0);
+
   return vec4<f32>(mix(BG, c, fade) * u.exposure, 1.0);
 }
 
@@ -183,5 +239,121 @@ fn wall_color(wp: vec3<f32>) -> vec4<f32> {
 }
 @fragment fn fs_wall_refl(in: WallOut) -> @location(0) vec4<f32> {
   let c = wall_color(in.wp);
+  return vec4<f32>(c.rgb * c.a * glass_reflect(vec3<f32>(in.wp.x, -in.wp.y, in.wp.z)) * u.exposure, 1.0);
+}
+
+// ---- glass side and back walls along the terrain's left, right and far edges. Like the front wall,
+// each carries the signal line, here the terrain's edge, so the line follows the intersection of the
+// waterfall with the glass. The side walls follow the history rows as they slide away; the back wall
+// shows the oldest row.
+const SIDE_X: f32 = 9.5;
+const ROW_DZ: f32 = 0.11;                    // world depth of one history row
+const SIDE_LEN: f32 = 192.0 * 0.11;          // the terrain's depth, plus the row sliding off its end
+const SIDE_TICK: f32 = 2.2;                  // spacing of the fixed vertical lines (four floor-grid cells)
+struct SideOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) wp: vec3<f32>,
+  @location(1) @interpolate(flat) side: u32,
+};
+// The terrain's edge lies in each of these planes: the glass is pulled a hair toward the camera so the
+// line wins the depth tie.
+fn glass_pos(w: vec3<f32>, mirrored: bool) -> vec4<f32> {
+  var p = u.vp * vec4<f32>(w.x, select(w.y, -w.y, mirrored), w.z, 1.0);
+  p.z -= 2.0e-5 * p.w;
+  return p;
+}
+fn side_vertex(vi: u32, side: u32, mirrored: bool) -> SideOut {
+  var q = array<vec2<f32>, 6>(
+    vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+    vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+  let c = q[vi];
+  let w = vec3<f32>(select(-SIDE_X, SIDE_X, side == 1u), c.y * WALL_H, mix(0.03, -SIDE_LEN, c.x));
+  return SideOut(glass_pos(w, mirrored), w, side);
+}
+@vertex fn vs_side(@builtin(vertex_index) vi: u32, @builtin(instance_index) side: u32) -> SideOut {
+  return side_vertex(vi, side, false);
+}
+@vertex fn vs_side_refl(@builtin(vertex_index) vi: u32, @builtin(instance_index) side: u32) -> SideOut {
+  return side_vertex(vi, side, true);
+}
+fn back_vertex(vi: u32, mirrored: bool) -> WallOut {
+  var q = array<vec2<f32>, 6>(
+    vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+    vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+  let c = q[vi];
+  let w = vec3<f32>(mix(-SIDE_X, SIDE_X, c.x), c.y * WALL_H, -SIDE_LEN);
+  return WallOut(glass_pos(w, mirrored), w);
+}
+@vertex fn vs_back(@builtin(vertex_index) vi: u32) -> WallOut { return back_vertex(vi, false); }
+@vertex fn vs_back_refl(@builtin(vertex_index) vi: u32) -> WallOut { return back_vertex(vi, true); }
+
+// How strongly the far walls show: the terrain's own lines fade out with depth, but the glass keeps
+// enough to close the box.
+fn wall_fade(zr: f32) -> f32 {
+  return mix(0.3, 1.0, pow(1.0 - clamp(zr / f32(NZ - 1u), 0.0, 1.0), 1.6));
+}
+// The terrain's height along one side edge at a fractional row position, as (left or mixed, right).
+fn edge_h(side: u32, zr: f32) -> vec2<f32> {
+  let zc = min(zr, f32(NZ - 1u));
+  let i0 = min(u32(zc), NZ - 2u);
+  let xi = select(0u, NX - 1u, side == 1u);
+  return mix(wf_h2(xi, i0), wf_h2(xi, i0 + 1u), zc - f32(i0));
+}
+
+// A pane of glass at height `y` carrying the signal line(s) at `hh` (left or mixed, right) in world
+// units; `vgrid` is the fixed vertical grid line and `post` a vertical frame post.
+fn pane_color(y: f32, hh: vec2<f32>, vgrid: f32, post: f32, fade: f32) -> vec4<f32> {
+  let stereo = u.mode > 0.5;
+  let col = palette(0.3, 0.5);
+  let px = fwidth(y);
+  // distance to each signal line in screen pixels, so steep stretches stay as crisp as flat ones
+  let fl = y - hh.x;
+  let fr = y - hh.y;
+  let gl = max(fwidth(fl), 0.35 * px);
+  let gr = max(fwidth(fr), 0.35 * px);
+  let curve_l = 1.0 - smoothstep(0.0, 2.2, abs(fl) / gl);
+  let curve_r = select(0.0, 1.0 - smoothstep(0.0, 2.2, abs(fr) / gr), stereo);
+  let below_l = 1.0 - smoothstep(-1.0, 1.0, fl / gl);
+  let below_r = select(0.0, 1.0 - smoothstep(-1.0, 1.0, fr / gr), stereo);
+  let lv = gridline(y / (WALL_H / 6.0));
+  let frame = max(max(1.0 - smoothstep(0.0, 2.0 * px, y), 1.0 - smoothstep(0.0, 2.0 * px, WALL_H - y)), post);
+  let cl = select(col, STEREO_L, stereo);
+  let kb = select(1.0, 0.5, stereo);   // two fills overlap in stereo, so each is lighter
+  let rgb = col * (0.25 * lv + 0.14 * vgrid + 0.9 * frame)
+          + cl * (3.0 * curve_l + 0.7 * kb * below_l)
+          + STEREO_R * (3.0 * curve_r + 0.7 * kb * below_r);
+  let a = clamp(0.045 + 0.32 * max(below_l, below_r) + 0.25 * lv + 0.12 * vgrid + 0.7 * frame + 0.95 * max(curve_l, curve_r), 0.0, 1.0);
+  return vec4<f32>(rgb, a * fade);
+}
+
+fn side_color(wp: vec3<f32>, side: u32) -> vec4<f32> {
+  // history row under this point (rows slide away continuously)
+  let zr = max(-wp.z / ROW_DZ - u.res.z, 0.0);
+  let vz = gridline(wp.z / SIDE_TICK) * line_aa(fwidth(wp.z / SIDE_TICK));
+  return pane_color(wp.y, edge_h(side, zr) * WALL_H, vz, 0.0, wall_fade(zr));
+}
+fn back_color(wp: vec3<f32>) -> vec4<f32> {
+  // the oldest history row, interpolated across bins like the front wall's live line
+  let fx = clamp((wp.x / 19.0 + 0.5) * f32(NX - 1u), 0.0, f32(NX - 1u) - 0.001);
+  let i0 = u32(floor(fx));
+  let hh = mix(wf_h2(i0, NZ - 1u), wf_h2(i0 + 1u, NZ - 1u), fract(fx)) * WALL_H;
+  let vx = gridline(wp.x / 2.0) * line_aa(fwidth(wp.x / 2.0));
+  let ex = min(wp.x + SIDE_X, SIDE_X - wp.x);
+  return pane_color(wp.y, hh, vx, 1.0 - smoothstep(0.0, 0.05, ex), wall_fade(f32(NZ - 1u)));
+}
+@fragment fn fs_side(in: SideOut) -> @location(0) vec4<f32> {
+  let c = side_color(in.wp, in.side);
+  return vec4<f32>(c.rgb * u.exposure, c.a);
+}
+@fragment fn fs_side_refl(in: SideOut) -> @location(0) vec4<f32> {
+  let c = side_color(in.wp, in.side);
+  return vec4<f32>(c.rgb * c.a * glass_reflect(vec3<f32>(in.wp.x, -in.wp.y, in.wp.z)) * u.exposure, 1.0);
+}
+@fragment fn fs_back(in: WallOut) -> @location(0) vec4<f32> {
+  let c = back_color(in.wp);
+  return vec4<f32>(c.rgb * u.exposure, c.a);
+}
+@fragment fn fs_back_refl(in: WallOut) -> @location(0) vec4<f32> {
+  let c = back_color(in.wp);
   return vec4<f32>(c.rgb * c.a * glass_reflect(vec3<f32>(in.wp.x, -in.wp.y, in.wp.z)) * u.exposure, 1.0);
 }

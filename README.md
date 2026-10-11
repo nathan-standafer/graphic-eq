@@ -41,8 +41,11 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   the floor, treble along the ceiling, left channel on the left wall, right on the right. Loud bins
   push inward, low-frequency hits launch luminous rings down the tube, treble accents flicker.
 - **3D columns** - segmented LED cores in glass housings on a glossy floor.
-- **Waterfall** - the spectrum history as a wireframe terrain (mixed or stereo overlay), standing on a
-  glass floor that reflects it.
+- **Waterfall** - the spectrum history as a wireframe terrain (mixed or stereo overlay), inside glass
+  walls on all four sides. The front wall carries the live spectrum line; each side wall carries the
+  terrain's edge and the back wall the oldest row, so their lines follow where the waterfall meets the
+  glass. It stands on a glass floor: a mirrored copy of the terrain and walls, a grid seen through the surface, light
+  cast by the walls, and sheen from overhead light bars.
 
 **Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
 (your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip

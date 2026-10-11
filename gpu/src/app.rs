@@ -472,7 +472,7 @@ impl App {
 
 /// Estimated GPU milliseconds of a scene at 5120x1440; the stereo waterfall draws two meshes.
 fn scene_cost_of(scene: u32, stereo_waterfall: bool) -> f32 {
-    scenes::info(scene).cost_ms + if scene == scenes::WATERFALL && stereo_waterfall { 2.1 } else { 0.0 }
+    scenes::info(scene).cost_ms + if scene == scenes::WATERFALL && stereo_waterfall { 2.2 } else { 0.0 }
 }
 
 fn scene_cost(r: &Resolved) -> f32 {

@@ -607,7 +607,7 @@ timestamp queries).
 | Scene | fps | frame median / p99 | Scene GPU | Bloom GPU |
 |-------|-----|--------------------|-----------|-----------|
 | 3D columns | 120.0 | 8.33 / 9.1 ms | 2.1 ms | 0.45 ms |
-| Waterfall (mixed / stereo), with glass-floor reflections | 120.0 | 8.33 / 9.1 ms | 2.2 / 4.4 ms | 0.45 ms |
+| Waterfall (mixed / stereo), with glass floor and walls | 120.0 | 8.33 / 9.1 ms (stereo 9.8) | 3.1 / 5.3 ms | 0.45 ms |
 | Spectrum Tunnel | 120.0 | 8.33 / 9.0 ms | 2.75 ms | 0.45 ms |
 
 Transitions also hold 120.0 fps (p99 9-11 ms). The compositor estimates the cost of both scenes and

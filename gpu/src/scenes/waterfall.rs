@@ -1,14 +1,18 @@
 use super::*;
 
-/// Spectrum history as a scrolling wireframe terrain in front of a glass wall, standing on a
-/// glass floor that reflects both.
+/// Spectrum history as a scrolling wireframe terrain inside a box of glass walls (front, both sides
+/// and back), standing on a glass floor that reflects all of it.
 pub struct Waterfall {
     floor: wgpu::RenderPipeline,
     terrain_refl: wgpu::RenderPipeline,
     wall_refl: wgpu::RenderPipeline,
+    side_refl: wgpu::RenderPipeline,
+    back_refl: wgpu::RenderPipeline,
     terrain: wgpu::RenderPipeline,
     terrain_stereo: wgpu::RenderPipeline,
     wall: wgpu::RenderPipeline,
+    side: wgpu::RenderPipeline,
+    back: wgpu::RenderPipeline,
 }
 
 const CELLS: u32 = (HIST_W - 1) * 191 * 6;
@@ -26,10 +30,14 @@ impl Waterfall {
             floor: ctx.pipeline(&sh, "wfloor", "vs_wfloor", "fs_wfloor", floor),
             terrain_refl: ctx.pipeline(&sh, "ter_refl", "vs_ter_refl", "fs_ter_refl", overlay),
             wall_refl: ctx.pipeline(&sh, "wall_refl", "vs_wall_refl", "fs_wall_refl", overlay),
+            side_refl: ctx.pipeline(&sh, "side_refl", "vs_side_refl", "fs_side_refl", overlay),
+            back_refl: ctx.pipeline(&sh, "back_refl", "vs_back_refl", "fs_back_refl", overlay),
             terrain: ctx.pipeline(&sh, "ter", "vs_ter", "fs_ter", Pipe::OPAQUE),
             // stereo overlay: both channels' wireframes add together, no occlusion between them
             terrain_stereo: ctx.pipeline(&sh, "ter_st", "vs_ter", "fs_ter", overlay),
             wall: ctx.pipeline(&sh, "wall", "vs_wall", "fs_wall", glass),
+            side: ctx.pipeline(&sh, "side", "vs_side", "fs_side", glass),
+            back: ctx.pipeline(&sh, "back", "vs_back", "fs_back", glass),
         }
     }
 }
@@ -43,6 +51,10 @@ impl Scene for Waterfall {
         pass.draw(0..REFL_CELLS, 0..if f.p.mode == 1 { 2 } else { 1 });
         pass.set_pipeline(&self.wall_refl);
         pass.draw(0..6, 0..1);
+        pass.set_pipeline(&self.side_refl);
+        pass.draw(0..6, 0..2); // left, right
+        pass.set_pipeline(&self.back_refl);
+        pass.draw(0..6, 0..1);
         if f.p.mode == 1 {
             pass.set_pipeline(&self.terrain_stereo);
             pass.draw(0..CELLS, 0..2); // left, right
@@ -50,6 +62,11 @@ impl Scene for Waterfall {
             pass.set_pipeline(&self.terrain);
             pass.draw(0..CELLS, 0..1);
         }
+        // glass back to front
+        pass.set_pipeline(&self.back);
+        pass.draw(0..6, 0..1);
+        pass.set_pipeline(&self.side);
+        pass.draw(0..6, 0..2);
         pass.set_pipeline(&self.wall);
         pass.draw(0..6, 0..1);
     }

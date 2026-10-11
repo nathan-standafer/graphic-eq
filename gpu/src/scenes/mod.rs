@@ -145,7 +145,7 @@ const INFOS: [SceneInfo; 3] = [
         name: "Waterfall",
         cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
         controls: &[Control::WaterfallChannels, Control::WaterfallDetail],
-        cost_ms: 2.3,
+        cost_ms: 3.0,
     },
     SceneInfo {
         id: TUNNEL,
