@@ -86,26 +86,32 @@ fn soft_line(v: f32, s: f32) -> f32 {
   } else {
     e = palette(clamp(h * 1.15, 0.0, 1.0), in.cell.x / f32(NX - 1u)) * wire * (0.55 + 2.6 * h) * fade;
   }
-  return vec4<f32>(e * glass_reflect(in.wp) * u.exposure, 1.0);
+  let out = e * glass_reflect(in.wp) * u.exposure;
+  if (max(out.x, max(out.y, out.z)) < 0.002) { discard; }     // between the lines: nothing to add
+  return vec4<f32>(out, 1.0);
 }
 
 @fragment fn fs_ter(in: TerOut) -> @location(0) vec4<f32> {
-  let n = normalize(cross(dpdx(in.wp), dpdy(in.wp)));
-  let shade = 0.5 + 0.5 * abs(dot(n, normalize(vec3<f32>(0.3, 1.0, 0.5))));
   let depth = clamp(in.cell.y / f32(NZ - 1u), 0.0, 1.0);
   let fade = pow(1.0 - depth, 1.6);
   let aa = 1.0 - smoothstep(0.45, 0.9, max(fwidth(in.cell.y), fwidth(in.cell.x)));  // fade lines that get sub-pixel
   let wire = max(line(in.cell.y), 0.35 * line(in.cell.x * 0.5)) * aa;
-  let flash = 1.0 + u.flash * 0.5 * u.fx.x;
   if (u.mode > 0.5) {
-    // stereo overlay: additive wireframe, left = cyan, right = magenta
+    // stereo overlay: additive wireframe, left = cyan, right = magenta. Pixels between the lines add nothing.
+    if (wire * fade < 0.01) { discard; }
     let base = select(STEREO_L, STEREO_R, in.ch == 1u);
     return vec4<f32>(base * wire * (0.10 + 0.50 * in.h) * fade * u.exposure, 1.0);
   }
+  let n = normalize(cross(dpdx(in.wp), dpdy(in.wp)));
+  let shade = 0.5 + 0.5 * abs(dot(n, normalize(vec3<f32>(0.3, 1.0, 0.5))));
+  let flash = 1.0 + u.flash * 0.5 * u.fx.x;
   let col = palette(clamp(in.h * 1.15, 0.0, 1.0), in.cell.x / f32(NX - 1u));
   var c = vec3<f32>(0.006, 0.008, 0.016) + col * 0.05 * shade * in.h;
   c += col * wire * (0.55 + 2.6 * in.h) * fade * flash;
-  c = mix(BG, c, fade);
+  // the far end fades into what the floor beside it looks like at that distance: dark nearby, the
+  // horizon's fog only far away
+  let haze = smoothstep(20.0, 130.0, length(in.wp - u.cam.xyz));
+  c = mix(mix(BG, sky_fog(), haze), c, fade);
   return vec4<f32>(c * u.exposure, 1.0);
 }
 
@@ -119,7 +125,6 @@ struct FloorOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> 
   let w = vec3<f32>(mix(-FLOOR_EXTENT, FLOOR_EXTENT, c.x), -0.004, mix(-FLOOR_EXTENT, FLOOR_EXTENT, c.y));
   return FloorOut(u.vp * vec4<f32>(w, 1.0), w);
 }
-const GRID_DEPTH: f32 = 0.7;   // the grid lies this far below the glass surface
 
 // A long light bar overhead, seen as a straight band across the glass. `t` is the tangent of the
 // reflected ray's elevation toward the far end of the floor, which is constant along a line of
@@ -139,26 +144,26 @@ fn lightbar(r: vec3<f32>, t0: f32, half_t: f32, half_x: f32) -> f32 {
   let fres = 0.07 + 0.93 * pow(1.0 - cosv, 5.0);            // glass: dim reflection from above, strong when grazing
   let dom = palette(0.25, 0.5);
   let fade = 1.0 - smoothstep(20.0, 130.0, dist);
+  let r = vec3<f32>(-v.x, v.y, -v.z);                       // where a ray mirrored by the glass goes: up into the sky
+  let pa = length(fwidth(r)) * 0.58;
 
-  // The grid is under the glass: find where this view ray reaches the plane GRID_DEPTH below the
-  // surface, so the lines shift against the surface as the camera moves. Glass dims and tints them.
-  let through = GRID_DEPTH / max(v.y, 0.06);
-  let q = in.wp.xz - v.xz * through;
-  let gz = -q.y / (0.11 * 5.0);
-  let aa = line_aa(max(fwidth(q.x), fwidth(gz)));
-  let g = max(gridline(q.x), gridline(gz)) * aa;
-  let absorb = exp(-through * 0.22);
+  // The grid is etched into the surface, at zero level where the waterfall stands, so the terrain and its
+  // reflection meet it at the same place.
+  let gz = -in.wp.z / (0.11 * 5.0);
+  let aa = line_aa(max(fwidth(in.wp.x), fwidth(gz)));
+  let g = max(gridline(in.wp.x), gridline(gz)) * aa;
   var c = vec3<f32>(0.004, 0.006, 0.013);
-  c += dom * g * 0.22 * (1.0 - 0.7 * fres) * absorb;
+  c += dom * g * 0.30 * (1.0 - 0.5 * fres);
 
   // light cast onto the glass by the lit wall: strongest right in front of it
-  let xi = u32(clamp((in.wp.x / 19.0 + 0.5) * f32(NX - 1u) + 0.5, 0.0, f32(NX - 1u)));
-  let hn = wf_h2(xi, 0u);
-  let front = max(in.wp.z, 0.0);
-  let spill = exp(-front * 0.9) * smoothstep(13.0, 9.0, abs(in.wp.x)) * select(0.0, 1.0, in.wp.z > 0.0);
-  var pool = palette(clamp(hn.x * 1.15, 0.0, 1.0), clamp(in.wp.x / 19.0 + 0.5, 0.0, 1.0)) * hn.x * hn.x;
-  if (u.mode > 0.5) { pool = STEREO_L * hn.x * hn.x + STEREO_R * hn.y * hn.y; }
-  c += pool * spill * 0.14;
+  if (in.wp.z > 0.0 && in.wp.z < 5.0 && abs(in.wp.x) < 13.0) {
+    let xi = u32(clamp((in.wp.x / 19.0 + 0.5) * f32(NX - 1u) + 0.5, 0.0, f32(NX - 1u)));
+    let hn = wf_h2(xi, 0u);
+    let spill = exp(-in.wp.z * 0.9) * smoothstep(13.0, 9.0, abs(in.wp.x));
+    var pool = palette(clamp(hn.x * 1.15, 0.0, 1.0), clamp(in.wp.x / 19.0 + 0.5, 0.0, 1.0)) * hn.x * hn.x;
+    if (u.mode > 0.5) { pool = STEREO_L * hn.x * hn.x + STEREO_R * hn.y * hn.y; }
+    c += pool * spill * 0.14;
+  }
 
   // and by the side and back walls, whose edge lines light the glass beside them
   let zr = max(-in.wp.z / ROW_DZ - u.res.z, 0.0);
@@ -180,12 +185,11 @@ fn lightbar(r: vec3<f32>, t0: f32, half_t: f32, half_x: f32) -> f32 {
 
   // what the glass mirrors of the sky: three long light bars (they slide as the view moves) and a
   // faint glow toward the horizon
-  let r = vec3<f32>(-v.x, v.y, -v.z);
   let boxes = 2.4 * lightbar(r, 1.35, 0.07, 3.0) + 1.8 * lightbar(r, 0.95, 0.025, 3.5) + 1.3 * lightbar(r, 0.62, 0.03, 2.5);
   c += mix(dom, vec3<f32>(1.0), 0.3) * boxes * fres;
-  c += dom * 0.05 * pow(1.0 - cosv, 4.0);
+  c += sky_color(r, pa, false) * (0.14 + 0.86 * pow(1.0 - cosv, 3.0));   // the sky, mirrored in the glass
 
-  return vec4<f32>(mix(BG, c, fade) * u.exposure, 1.0);
+  return vec4<f32>(mix(sky_fog(), c, fade) * u.exposure, 1.0);
 }
 
 // ---- glass wall at time 0 (front of the waterfall)

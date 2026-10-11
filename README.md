@@ -44,8 +44,11 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
 - **Waterfall** - the spectrum history as a wireframe terrain (mixed or stereo overlay), inside glass
   walls on all four sides. The front wall carries the live spectrum line; each side wall carries the
   terrain's edge and the back wall the oldest row, so their lines follow where the waterfall meets the
-  glass. It stands on a glass floor: a mirrored copy of the terrain and walls, a grid seen through the surface, light
-  cast by the walls, and sheen from overhead light bars.
+  glass. It stands on a glass floor under a night sky: stars, a nebula band, a ringed planet, a small
+  planet and moons, all tinted from the theme. Bass hits flare the stars and planet atmospheres and send
+  a shockwave across the sky, and the floor mirrors all of it, along with the terrain and walls. A grid
+  is etched into the surface at zero level, and the walls cast a little light onto the glass, with
+  sheen from overhead light bars.
 
 **Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
 (your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip

@@ -607,13 +607,13 @@ timestamp queries).
 | Scene | fps | frame median / p99 | Scene GPU | Bloom GPU |
 |-------|-----|--------------------|-----------|-----------|
 | 3D columns | 120.0 | 8.33 / 9.1 ms | 2.1 ms | 0.45 ms |
-| Waterfall (mixed / stereo), with glass floor and walls | 120.0 | 8.33 / 9.1 ms (stereo 9.8) | 3.1 / 5.3 ms | 0.45 ms |
+| Waterfall (mixed / stereo), with glass floor, walls and sky | 120.0 | 8.33 / 9.0 ms (stereo 9.1) | 3.5 / 5.0 ms | 0.45 ms |
 | Spectrum Tunnel | 120.0 | 8.33 / 9.0 ms | 2.75 ms | 0.45 ms |
 
 Transitions also hold 120.0 fps (p99 9-11 ms). The compositor estimates the cost of both scenes and
 crossfades live only if it fits 6.6 ms of GPU time; otherwise the outgoing scene is rendered once and
 held as a still image (this is the plan's frozen-image fallback; with today's costs
-tunnel/tunnel and any pair that includes the stereo waterfall take it). Source-to-UI latency for an impulse is
+tunnel/tunnel, waterfall/waterfall and any pair that includes the stereo waterfall take it). Source-to-UI latency for an impulse is
 about 4 ms median (12 ms worst) after a detection delay of up to one 10 ms hop.
 
 **Findings worth keeping**
@@ -621,6 +621,17 @@ about 4 ms median (12 ms worst) after a detection delay of up to one 10 ms hop.
 - The tunnel's first version cost 4.4 ms, mostly one loop: evaluating every ring's three `exp()` per
   pixel. Culling by distance from each ring took it to 2.75 ms. Bisecting with GPU timings beat
   guessing: palette work and MSAA were both smaller than expected (MSAA off saves about a third of the tunnel).
+- The waterfall's night sky first cost 3 ms (the scene went from 3.1 to 6.1 ms). What brought it back to
+  3.5 ms: every part of the sky bounds its own work (stars skip the horizon, a planet is one dot product
+  away from its disc, the nebula lives in its band); stars sit on a cube-face grid instead of needing
+  `asin`/`atan2`/`cos` per pixel, and most pixels in a star's cell leave early; the backdrop is a quad
+  clipped to the horizon rather than the whole screen; and the mirror skips what a blurred image does not
+  show. The biggest single gains were structural: drawing the opaque terrain first so the depth test skips
+  the floor and reflections behind it (-0.6 ms), and discarding the stereo overlay's empty pixels instead of
+  blending zeros (-1.2 ms in stereo, which ended up cheaper than before the sky).
+- The camera's far plane (100 units) clips the floor long before its 600-unit edge. Once the fog at the
+  horizon was lighter than the clear colour that showed as a black strip, so the sky quad now reaches below
+  the horizon far enough to paint the fog there.
 - `pow(x, y)` with a slightly negative `x` is NaN in WGSL, and 4x MSAA can extrapolate an attribute
   just outside its range at triangle edges. One NaN pixel spread through the bloom pyramid into a
   screen-sized black block. Interpolated values are now clamped and the bloom input is sanitized.
