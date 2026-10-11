@@ -175,7 +175,7 @@ fn hist_h(xi: u32, zi: u32) -> f32 {
   let zi = cz + o.y;
   let h = hist_h(xi, zi);
   let fz = f32(zi) / f32(NZ - 1u);
-  let w = vec3<f32>((f32(xi) / f32(NX - 1u) - 0.5) * 19.0, h * 5.5, -f32(zi) * 0.11);
+  let w = vec3<f32>((f32(xi) / f32(NX - 1u) - 0.5) * 19.0, h * 5.5, -(f32(zi) + u.res.z) * 0.11);
   var out: TerOut;
   out.pos = u.vp * vec4<f32>(w, 1.0);
   out.cell = vec2<f32>(f32(xi), f32(zi));
@@ -198,6 +198,28 @@ fn line(v: f32) -> f32 {
   let col = palette(clamp(in.h * 1.15, 0.0, 1.0), in.cell.x / f32(NX - 1u));
   var c = vec3<f32>(0.006, 0.008, 0.016) + col * 0.05 * shade * in.h;
   c += col * wire * (0.55 + 2.6 * in.h) * fade;
+  c = mix(vec3<f32>(0.004, 0.005, 0.012), c, fade);
+  return vec4<f32>(c, 1.0);
+}
+
+// ------------------------------------------------- waterfall floor (flat grid at 0)
+@vertex fn vs_wfloor(@builtin(vertex_index) vi: u32) -> FloorOut {
+  var q = array<vec2<f32>, 6>(
+    vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+    vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+  let c = q[vi];
+  let w = vec3<f32>(mix(-9.5, 9.5, c.x), -0.004, mix(4.0, -21.1, c.y));
+  return FloorOut(u.vp * vec4<f32>(w, 1.0), w);
+}
+@fragment fn fs_wfloor(in: FloorOut) -> @location(0) vec4<f32> {
+  // same coordinates as the terrain: x spacing 19/95 per bin, z spacing 0.11 per history row,
+  // lines every 5 bins / 5 rows, scrolling with the history
+  let zc = -in.wp.z / 0.11 - u.res.z - u.res.w;
+  let g = max(gridline(in.wp.x / 1.0), gridline(zc / 5.0));
+  let depth = clamp(-in.wp.z / 21.1, 0.0, 1.0);
+  let fade = pow(1.0 - depth, 1.4) * (1.0 - smoothstep(8.0, 9.5, abs(in.wp.x)));
+  let col = palette(0.25, 0.5);
+  var c = vec3<f32>(0.005, 0.007, 0.014) + col * g * 0.55 * fade;
   c = mix(vec3<f32>(0.004, 0.005, 0.012), c, fade);
   return vec4<f32>(c, 1.0);
 }

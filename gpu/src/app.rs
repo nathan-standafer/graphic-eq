@@ -328,6 +328,7 @@ impl eframe::App for App {
                     pitch: self.pitch,
                     zoom: self.zoom,
                     pan: self.pan,
+                    row_frac: (self.hist_acc * HISTORY_RATE).clamp(0.0, 1.0),
                 },
                 size_px,
                 rows,

@@ -53,6 +53,8 @@ pub struct SceneParams {
     pub zoom: f32,
     /// Middle-drag translation in screen points (scaled by view distance).
     pub pan: [f32; 2],
+    /// Fraction (0..1) of the way to the next waterfall history row.
+    pub row_frac: f32,
 }
 
 pub struct SceneCallback {
@@ -91,10 +93,12 @@ pub struct Gpu {
     scene_bg: wgpu::BindGroup,
     hist_tex: wgpu::Texture,
     head: u32,
+    total_rows: u32,
     bg_pipe: wgpu::RenderPipeline,
     col_pipe: wgpu::RenderPipeline,
     floor_pipe: wgpu::RenderPipeline,
     ter_pipe: wgpu::RenderPipeline,
+    wfloor_pipe: wgpu::RenderPipeline,
     bright_pipe: wgpu::RenderPipeline,
     blur_pipe: wgpu::RenderPipeline,
     down_pipe: wgpu::RenderPipeline,
@@ -234,6 +238,7 @@ impl Gpu {
         let col_pipe = scene_pipe("col", "vs_col", "fs_col", true, false, true);
         let floor_pipe = scene_pipe("floor", "vs_floor", "fs_floor", false, false, true);
         let ter_pipe = scene_pipe("ter", "vs_ter", "fs_ter", true, false, false);
+        let wfloor_pipe = scene_pipe("wfloor", "vs_wfloor", "fs_wfloor", true, false, false);
 
         let post_pipe = |label: &str, fs: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -317,8 +322,8 @@ impl Gpu {
         });
 
         Gpu {
-            scene_bgl, post_bgl, comp_bgl, sampler, uniform_buf, scene_bg, hist_tex, head: 0,
-            bg_pipe, col_pipe, floor_pipe, ter_pipe, bright_pipe, blur_pipe, down_pipe, comp_pipe,
+            scene_bgl, post_bgl, comp_bgl, sampler, uniform_buf, scene_bg, hist_tex, head: 0, total_rows: 0,
+            bg_pipe, col_pipe, floor_pipe, ter_pipe, wfloor_pipe, bright_pipe, blur_pipe, down_pipe, comp_pipe,
             targets: None,
         }
     }
@@ -461,6 +466,7 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
 
         for row in &self.rows {
             gpu.head = (gpu.head + 1) % HIST_H;
+            gpu.total_rows = gpu.total_rows.wrapping_add(1);
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &gpu.hist_tex,
@@ -497,7 +503,7 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
             bass: p.bass,
             levels: pack(&p.levels),
             peaks: pack(&p.peaks),
-            res: [w as f32, h as f32, 0.0, 0.0],
+            res: [w as f32, h as f32, p.row_frac, (gpu.total_rows % 5) as f32],
         };
         queue.write_buffer(&gpu.uniform_buf, 0, bytemuck::bytes_of(&u));
         let t = gpu.targets.as_ref().unwrap();
@@ -538,6 +544,8 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
                 pass.draw(0..36, 0..11); // columns
                 pass.draw(0..36, 22..33); // peak caps
             } else {
+                pass.set_pipeline(&gpu.wfloor_pipe);
+                pass.draw(0..6, 0..1);
                 pass.set_pipeline(&gpu.ter_pipe);
                 pass.draw(0..(95 * 191 * 6), 0..1);
             }
