@@ -251,7 +251,7 @@ struct WallOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> }
   // frame
   let ex = min(in.wp.x + 9.5, 9.5 - in.wp.x);
   let frame = max(1.0 - smoothstep(0.0, 0.05, ex), max(1.0 - smoothstep(0.0, 2.0 * px, y), 1.0 - smoothstep(0.0, 2.0 * px, WALL_H - y)));
-  var rgb = col * (0.25 * lv + 0.9 * frame + 3.0 * curve + 0.08 * below);
-  let a = clamp(0.045 - 0.025 * below + 0.25 * lv + 0.7 * frame + 0.95 * curve, 0.0, 1.0);
+  var rgb = col * (0.25 * lv + 0.9 * frame + 3.0 * curve + 0.7 * below);
+  let a = clamp(0.045 + 0.32 * below + 0.25 * lv + 0.7 * frame + 0.95 * curve, 0.0, 1.0);
   return vec4<f32>(rgb, a);
 }
