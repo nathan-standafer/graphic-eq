@@ -1,5 +1,22 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Synthetic-audio runs must not overwrite the user's saved settings.
+static READ_ONLY: AtomicBool = AtomicBool::new(false);
+
+pub fn set_read_only() {
+    READ_ONLY.store(true, Ordering::Relaxed);
+}
+
+/// A user's saved changes to a visual preset (the preset itself is never overwritten).
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+pub struct Variant {
+    pub theme: u32,
+    pub motion: f32,
+    pub flash: f32,
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -7,7 +24,7 @@ pub struct Settings {
     pub gains: [f32; 11],
     pub preset: String,
     pub eq_on: bool,
-    pub scene: u32,       // 0 columns, 1 waterfall
+    pub scene: u32,       // 0 columns, 1 waterfall, 2 tunnel (stable IDs)
     pub theme: u32,       // 0 classic, 1 amber, 2 ice, 3 neon, 4 rainbow
     pub range: f32,       // dB below full scale shown
     pub sensitivity: f32, // dB added to what is drawn
@@ -18,6 +35,14 @@ pub struct Settings {
     pub peak_caps: bool,
     pub source_pre: bool, // analyze before the EQ
     pub output: Option<String>,
+    pub motion: f32,      // camera and geometry movement, 0 = still
+    pub flash: f32,       // onset accents and flashes, 0 = none
+    pub look: [u32; 3],   // selected visual preset per scene
+    pub favorites: Vec<String>,
+    pub variants: BTreeMap<String, Variant>,
+    pub crossfade: bool,
+    pub auto_cycle: bool,
+    pub cycle_secs: f32,
 }
 
 impl Default for Settings {
@@ -37,6 +62,14 @@ impl Default for Settings {
             peak_caps: true,
             source_pre: false,
             output: None,
+            motion: 0.7,
+            flash: 0.8,
+            look: [0; 3],
+            favorites: Vec::new(),
+            variants: BTreeMap::new(),
+            crossfade: true,
+            auto_cycle: false,
+            cycle_secs: 45.0,
         }
     }
 }
@@ -51,10 +84,16 @@ fn path() -> PathBuf {
 
 impl Settings {
     pub fn load() -> Settings {
+        if std::env::var("GEQ_SETTINGS").map_or(false, |v| v == "default") {
+            return Settings::default();
+        }
         std::fs::read_to_string(path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
     }
 
     pub fn save(&self) {
+        if READ_ONLY.load(Ordering::Relaxed) {
+            return;
+        }
         let p = path();
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);

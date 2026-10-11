@@ -1,11 +1,23 @@
 //! Owns the EQ engine, the analyzer and the default-sink routing.
 
-use crate::analyzer::{Analyzer, Levels};
+use crate::analyzer::{Analyzer, Dsp, Levels, Onset, Shared};
 use crate::bands;
+use crate::clock;
 use crate::engine::Engine;
 use crate::routing::{self, VIRTUAL_SINK};
+use crate::synth::{Fixture, Synth, RATE};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// A synthetic source in place of `parec`. It never starts the EQ engine or changes routing.
+enum SynthSource {
+    /// Generated in real time on its own thread (performance runs, interactive use).
+    Thread { shared: Arc<Shared>, stop: Arc<AtomicBool> },
+    /// Advanced by the UI one frame at a time on a simulated clock (deterministic captures).
+    Stepped { dsp: Dsp, synth: Synth, levels: Levels, events: Vec<Onset> },
+}
 
 pub struct Audio {
     engine: Option<Engine>,
@@ -18,6 +30,7 @@ pub struct Audio {
     source_pre: bool,
     gains: [f32; bands::COUNT],
     last_check: Instant,
+    synth: Option<(Fixture, SynthSource)>,
 }
 
 impl Audio {
@@ -42,12 +55,85 @@ impl Audio {
             source_pre,
             gains,
             last_check: Instant::now(),
+            synth: None,
         };
         match target {
             Some(t) => a.begin(t),
             None => a.status = "No audio output found.".into(),
         }
         a
+    }
+
+    /// Synthetic audio only: no EQ engine, no routing changes. `stepped` selects the deterministic
+    /// frame-driven source over the real-time one.
+    pub fn new_synth(fx: Fixture, replay: Option<Vec<[f32; 2]>>, stepped: bool, gains: [f32; bands::COUNT]) -> Audio {
+        let make = move || match replay.clone() {
+            Some(frames) => Synth::with_replay(frames),
+            None => Synth::new(fx),
+        };
+        let src = if stepped {
+            SynthSource::Stepped { dsp: Dsp::new(), synth: make(), levels: Levels::default(), events: Vec::new() }
+        } else {
+            let shared = Arc::new(Shared::default());
+            let stop = Arc::new(AtomicBool::new(false));
+            let (sh, st) = (shared.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let mut dsp = Dsp::new();
+                let mut synth = make();
+                let origin = clock::now();
+                let t0 = Instant::now();
+                let (mut l, mut r) = (Vec::new(), Vec::new());
+                while !st.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(4));
+                    let want = (t0.elapsed().as_secs_f64() * RATE) as u64;
+                    let have = synth.position();
+                    if want <= have {
+                        continue;
+                    }
+                    l.clear();
+                    r.clear();
+                    synth.render((want - have) as usize, &mut l, &mut r);
+                    let t_end = origin + synth.position() as f64 / RATE;
+                    let (lv, ev) = dsp.push(&l, &r, t_end);
+                    sh.publish(lv, ev);
+                }
+            });
+            SynthSource::Thread { shared, stop }
+        };
+        Audio {
+            engine: None,
+            analyzer: None,
+            rx: None,
+            orig_default: None,
+            real_sink: None,
+            ready: false,
+            status: format!("Synthetic audio ({}); EQ engine off", fx.name()),
+            source_pre: false,
+            gains,
+            last_check: Instant::now(),
+            synth: Some((fx, src)),
+        }
+    }
+
+    pub fn is_synth(&self) -> bool {
+        self.synth.is_some()
+    }
+
+    /// Stepped sources only: advance the simulated clock by `dt` seconds. `now` is the sim time after the step.
+    pub fn advance(&mut self, now: f64) {
+        if let Some((_, SynthSource::Stepped { dsp, synth, levels, events })) = &mut self.synth {
+            let target = (now * RATE as f64).round() as u64;
+            let n = target.saturating_sub(synth.position()) as usize;
+            if n > 0 {
+                let (mut l, mut r) = (Vec::with_capacity(n), Vec::with_capacity(n));
+                synth.render(n, &mut l, &mut r);
+                let (lv, ev) = dsp.push(&l, &r, synth.position() as f64 / RATE as f64);
+                if let Some(lv) = lv {
+                    *levels = lv;
+                }
+                events.extend(ev);
+            }
+        }
     }
 
     fn begin(&mut self, target: String) {
@@ -63,6 +149,9 @@ impl Audio {
 
     fn retarget(&mut self) {
         self.analyzer = None;
+        if self.synth.is_some() {
+            return;
+        }
         let dev = if self.ready && self.source_pre {
             Some(format!("{VIRTUAL_SINK}.monitor"))
         } else {
@@ -125,7 +214,7 @@ impl Audio {
     }
 
     pub fn set_output(&mut self, name: String) {
-        if self.real_sink.as_deref() == Some(&name) {
+        if self.synth.is_some() || self.real_sink.as_deref() == Some(&name) {
             return;
         }
         self.engine = None;
@@ -135,10 +224,26 @@ impl Audio {
     }
 
     pub fn levels(&self) -> Option<Levels> {
-        self.analyzer.as_ref().map(|a| a.latest())
+        match &self.synth {
+            Some((_, SynthSource::Stepped { levels, .. })) => Some(levels.clone()),
+            Some((_, SynthSource::Thread { shared, .. })) => Some(shared.levels.lock().unwrap().clone()),
+            None => self.analyzer.as_ref().map(|a| a.shared.levels.lock().unwrap().clone()),
+        }
+    }
+
+    /// Onsets found since the last call, oldest first.
+    pub fn take_events(&mut self) -> Vec<Onset> {
+        match &mut self.synth {
+            Some((_, SynthSource::Stepped { events, .. })) => std::mem::take(events),
+            Some((_, SynthSource::Thread { shared, .. })) => std::mem::take(&mut *shared.events.lock().unwrap()),
+            None => self.analyzer.as_ref().map(|a| std::mem::take(&mut *a.shared.events.lock().unwrap())).unwrap_or_default(),
+        }
     }
 
     pub fn shutdown(&mut self) {
+        if let Some((_, SynthSource::Thread { stop, .. })) = &self.synth {
+            stop.store(true, Ordering::Relaxed);
+        }
         self.analyzer = None;
         if self.ready {
             if let Some(t) = self.real_sink.clone().or_else(|| self.orig_default.clone()) {

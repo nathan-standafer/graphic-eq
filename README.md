@@ -28,11 +28,45 @@ Needs only: Python 3, PyGObject (GTK 3, GStreamer, `gst-plugins-good`), pycairo,
 
 ## GPU version (Rust + wgpu)
 
-`gpu/` is a ground-up Rust port with a GPU-rendered display: 3D LED columns on a reflective floor, a
-scrolling waterfall terrain, HDR bloom, 4x MSAA. It holds 120 fps even in a 4800x1300 window.
-It does everything the Python app does (same EQ engine, routing, presets); settings live in
-`~/.config/graphic-eq/gpu-settings.json`.
+`gpu/` is a ground-up Rust port with a GPU-rendered display. It does everything the Python app does
+(same EQ engine, routing, presets); settings live in `~/.config/graphic-eq/gpu-settings.json`.
 
     cd gpu && cargo run --release
 
-Needs Rust (rustup) and a Vulkan-capable GPU. Pick the scene, colors, glow and more under "Display".
+Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a Radeon RX 580.
+
+**Scenes**, each with curated *looks* (palette, exposure, bloom, motion):
+
+- **Spectrum Tunnel** - you look down a tube whose wall is the last three seconds of spectrum: bass along
+  the floor, treble along the ceiling, left channel on the left wall, right on the right. Loud bins
+  push inward, low-frequency hits launch luminous rings down the tube, treble accents flicker.
+- **3D columns** - segmented LED cores in glass housings on a glossy floor.
+- **Waterfall** - the spectrum history as a wireframe terrain (mixed or stereo overlay), standing on a
+  glass floor that reflects it.
+
+**Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
+(your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip
+appears on mouse movement and fades after a few seconds. Display menu: looks, colors, **Motion**
+(camera drift, banking, wall breathing; 0 holds everything still), **Flash** (onset rings and
+pulses; 0 turns them off), Glow, crossfade/cut, auto-cycle, range, sensitivity. Motion and Flash are
+independent. Drag orbits, scroll zooms, middle-drag pans, double-click resets; the idle camera drift
+pauses while you hold the camera and eases back afterwards.
+
+**Developing without audio routing.** `GEQ_SYNTH` replaces the capture with deterministic synthetic
+audio: no EQ engine, no routing changes, settings are read-only.
+
+    GEQ_SYNTH=1 cargo run --release              # a looping 64 s groove (demo)
+    GEQ_SYNTH=impulse|percussion|tones|sweep|dense|stereo|phase|quiet|silence cargo run --release
+    GEQ_REPLAY=clip.wav cargo run --release      # loop a WAV file (PCM or float, any rate)
+
+    # a deterministic 6 s screenshot of the tunnel at 32:9, without going full screen
+    GEQ_SYNTH=1 GEQ_SETTINGS=default GEQ_SCENE=2 GEQ_BARE=1 GEQ_SIZE=2560x720 GEQ_SHOT=/tmp/t.png,6 cargo run --release
+    # frame-time statistics and per-pass GPU time at 5120x1440
+    GEQ_SYNTH=1 GEQ_SCENE=2 GEQ_FPS=1 GEQ_GPUTIME=1 GEQ_FULLSCREEN=1 cargo run --release
+
+`GEQ_SHOT` with a synthetic source steps a simulated clock, so captures repeat exactly. Other hooks:
+`GEQ_PRESET`, `GEQ_THEME`, `GEQ_BLOOM`, `GEQ_MOTION`, `GEQ_FLASH`, `GEQ_STEREO`, `GEQ_ORBIT`,
+`GEQ_CYCLE=secs` (auto-cycle scenes), `GEQ_LATENCY=1` (onset delivery delay), `GEQ_BROWSER=1`,
+`GEQ_VIEW=scene|bloom|nan` (composite debug views). `tools/make-thumbs.sh` regenerates the look
+thumbnails from real captures. `cargo test` covers the synthetic source, onset detection, and the
+modulation layer; `cargo test -- --ignored live_capture` smoke-tests the live `parec` path.
