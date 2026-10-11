@@ -229,7 +229,7 @@ impl eframe::App for App {
                                 ui.spacing_mut().item_spacing.x = 0.0;
                                 ui.add_space(pad.max(0.0));
                                 ui.add(
-                                    egui::Slider::new(&mut g, bands::GAIN_MAX..=bands::GAIN_MIN)
+                                    egui::Slider::new(&mut g, bands::GAIN_MIN..=bands::GAIN_MAX)
                                         .vertical()
                                         .step_by(0.5)
                                         .show_value(false),
