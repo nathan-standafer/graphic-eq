@@ -36,6 +36,8 @@ pub struct App {
     pitch: f32,
     zoom: f32,
     pan: [f32; 2],
+    fullscreen: bool,
+    fs_since: f64,
     fps_frames: u32,
     fps_t0: f64,
 }
@@ -84,6 +86,8 @@ impl App {
             pitch: 0.0,
             zoom: 1.0,
             pan: [0.0; 2],
+            fullscreen: false,
+            fs_since: 0.0,
             fps_frames: 0,
             fps_t0: 0.0,
         }
@@ -191,6 +195,13 @@ impl eframe::App for App {
             }
         }
         crate::analyzer::set_curve_octaves([1.0 / 6.0, 1.0 / 3.0, 2.0 / 3.0][self.cfg.detail as usize % 3]);
+        // full screen: F or F11 toggles, Esc leaves
+        let (toggle, esc) = ctx.input(|i| {
+            (i.key_pressed(egui::Key::F11) || (i.key_pressed(egui::Key::F) && !i.modifiers.any()), i.key_pressed(egui::Key::Escape))
+        });
+        if toggle || (esc && self.fullscreen) || (std::env::var_os("GEQ_FULLSCREEN").is_some() && self.fs_since == 0.0 && !self.fullscreen) {
+            self.set_fullscreen(&ctx, if esc { false } else { !self.fullscreen });
+        }
         self.audio.poll();
         let dt = ctx.input(|i| i.unstable_dt).clamp(0.0, 0.1);
         self.step_levels(dt);
@@ -203,7 +214,7 @@ impl eframe::App for App {
         }
 
         // ---------------------------------------------------------------- header
-        egui::Panel::top("top").show_inside(ui, |ui| {
+        if !self.fullscreen { egui::Panel::top("top").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(6.0);
                 let mut on = self.cfg.eq_on;
@@ -232,15 +243,18 @@ impl eframe::App for App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(6.0);
                     self.options_menu(ui);
+                    if ui.button("Full screen").on_hover_text("F or F11 (Esc to leave)").clicked() {
+                        self.set_fullscreen(&ctx, true);
+                    }
                     if !self.audio.status.is_empty() {
                         ui.label(RichText::new(&self.audio.status).color(Color32::from_rgb(224, 164, 88)));
                     }
                 });
             });
-        });
+        }); }
 
         // --------------------------------------------------------------- sliders
-        egui::Panel::bottom("sliders").show_inside(ui, |ui| {
+        if !self.fullscreen { egui::Panel::bottom("sliders").show_inside(ui, |ui| {
             ui.add_space(6.0);
             let mut changed = false;
             ui.columns(bands::COUNT, |cols| {
@@ -281,7 +295,7 @@ impl eframe::App for App {
                 self.touch();
             }
             ui.add_space(6.0);
-        });
+        }); }
 
         // ------------------------------------------------------------------ scene
         egui::CentralPanel::default().frame(egui::Frame::NONE).show_inside(ui, |ui| {
@@ -354,6 +368,19 @@ impl eframe::App for App {
                 rows,
             };
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, cb));
+            if self.fullscreen {
+                let age = (ctx.input(|i| i.time) - self.fs_since) as f32;
+                if age < 3.5 {
+                    let alpha = (1.0 - ((age - 2.5) / 1.0).clamp(0.0, 1.0)) * 0.8;
+                    ui.painter().text(
+                        rect.left_top() + egui::vec2(16.0, 14.0),
+                        egui::Align2::LEFT_TOP,
+                        "Esc or F to exit full screen   ·   drag: rotate   middle-drag: pan   scroll: zoom",
+                        egui::FontId::proportional(14.0),
+                        Color32::from_white_alpha((alpha * 255.0) as u8),
+                    );
+                }
+            }
         });
     }
 
@@ -378,6 +405,12 @@ fn choice<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(T, 
 }
 
 impl App {
+    fn set_fullscreen(&mut self, ctx: &egui::Context, on: bool) {
+        self.fullscreen = on;
+        self.fs_since = ctx.input(|i| i.time).max(0.001);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
+    }
+
     fn options_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Display", |ui| {
             ui.set_min_width(300.0);
