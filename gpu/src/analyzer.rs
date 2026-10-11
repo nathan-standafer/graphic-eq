@@ -4,6 +4,7 @@ use crate::bands;
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub const FFT_SIZE: usize = 8192;
@@ -23,6 +24,13 @@ impl Default for Levels {
     fn default() -> Self {
         Levels { bands: [FLOOR_DB; bands::COUNT], curve: [FLOOR_DB; CURVE_POINTS], seq: 0 }
     }
+}
+
+/// Width (in octaves, as f32 bits) of the analysis window behind each waterfall bin.
+static CURVE_OCTAVES: AtomicU32 = AtomicU32::new(0x3eaaaaab); // 1/3 octave
+
+pub fn set_curve_octaves(oct: f32) {
+    CURVE_OCTAVES.store(oct.to_bits(), Ordering::Relaxed);
 }
 
 pub fn curve_freq(i: usize) -> f32 {
@@ -60,15 +68,7 @@ impl Analyzer {
             let wsq: f32 = window.iter().map(|w| w * w).sum();
             let bin_hz = bands::SAMPLE_RATE / FFT_SIZE as f32;
             let band_edges: Vec<(f32, f32)> = bands::FREQS.iter().map(|f| bands::edges(*f)).collect();
-            // The waterfall curve uses a narrow window (two point-spacings wide) for real
-            // resolution, scaled to the energy a full band-wide window would collect so levels
-            // stay comparable with the bars.
             let half = bands::step().sqrt();
-            let r = (20000.0f32 / 30.0).powf(1.0 / (CURVE_POINTS as f32 - 1.0));
-            let curve_scale = (half - 1.0 / half) / (r - 1.0 / r);
-            let curve_edges: Vec<(f32, f32)> =
-                (0..CURVE_POINTS).map(|i| (curve_freq(i) / r, curve_freq(i) * r)).collect();
-
             let mut ring = vec![0f32; FFT_SIZE];
             let mut head = 0usize;
             let mut buf = vec![0u8; HOP * 8];
@@ -119,12 +119,17 @@ impl Analyzer {
                     let e = (energy(hi) - energy(lo)) * scale;
                     if e > 1e-14 { (10.0 * e.log10() + CAL_DB).max(FLOOR_DB) } else { FLOOR_DB }
                 };
+                // Waterfall bins: window width is user-selectable; energy is scaled to what a
+                // full band-wide window would collect so levels stay comparable with the bars.
+                let w = (2f32.powf(f32::from_bits(CURVE_OCTAVES.load(Ordering::Relaxed)) * 0.5)).max(1.01);
+                let curve_scale = (half - 1.0 / half) / (w - 1.0 / w);
                 let mut lv = Levels::default();
                 for (i, e) in band_edges.iter().enumerate() {
                     lv.bands[i] = db(*e, 1.0);
                 }
-                for (i, e) in curve_edges.iter().enumerate() {
-                    lv.curve[i] = db(*e, curve_scale);
+                for i in 0..CURVE_POINTS {
+                    let f = curve_freq(i);
+                    lv.curve[i] = db((f / w, f * w), curve_scale);
                 }
                 seq += 1;
                 lv.seq = seq;

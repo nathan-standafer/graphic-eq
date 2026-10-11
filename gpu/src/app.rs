@@ -179,6 +179,7 @@ impl eframe::App for App {
                 self.fps_t0 = now;
             }
         }
+        crate::analyzer::set_curve_octaves([1.0 / 6.0, 1.0 / 3.0, 2.0 / 3.0][self.cfg.detail as usize % 3]);
         self.audio.poll();
         let dt = ctx.input(|i| i.unstable_dt).clamp(0.0, 0.1);
         self.step_levels(dt);
@@ -364,6 +365,9 @@ impl App {
             let mut touched = false;
             ui.label(RichText::new("SCENE").small().weak());
             touched |= choice(ui, &mut self.cfg.scene, &[(0, "3D columns"), (1, "Waterfall")]);
+            ui.add_space(4.0);
+            ui.label(RichText::new("WATERFALL DETAIL").small().weak());
+            touched |= choice(ui, &mut self.cfg.detail, &[(0, "Fine"), (1, "Medium"), (2, "Smooth")]);
             ui.add_space(4.0);
             ui.label(RichText::new("COLORS").small().weak());
             let themes: Vec<(u32, &str)> = THEMES.iter().enumerate().map(|(i, n)| (i as u32, *n)).collect();

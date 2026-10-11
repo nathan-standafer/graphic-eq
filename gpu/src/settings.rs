@@ -13,6 +13,7 @@ pub struct Settings {
     pub sensitivity: f32, // dB added to what is drawn
     pub fall: u32,        // 0 slow, 1 medium, 2 fast
     pub bloom: f32,
+    pub detail: u32,      // waterfall smoothing: 0 fine (1/6 oct), 1 medium (1/3), 2 smooth (2/3)
     pub peak_caps: bool,
     pub source_pre: bool, // analyze before the EQ
     pub output: Option<String>,
@@ -30,6 +31,7 @@ impl Default for Settings {
             sensitivity: 0.0,
             fall: 1,
             bloom: 0.9,
+            detail: 1,
             peak_caps: true,
             source_pre: false,
             output: None,
