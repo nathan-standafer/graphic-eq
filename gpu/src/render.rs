@@ -47,6 +47,10 @@ pub struct SceneParams {
     pub bass: f32,
     pub levels: [f32; 11],
     pub peaks: [f32; 11],
+    /// Orbit offsets from the default view (radians) and distance multiplier.
+    pub yaw: f32,
+    pub pitch: f32,
+    pub zoom: f32,
 }
 
 pub struct SceneCallback {
@@ -418,12 +422,19 @@ fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     ])
 }
 
-fn camera(mode: u32, aspect: f32, t: f32) -> (Mat4, Vec3) {
-    let (eye, target, fov) = if mode == 0 {
-        (Vec3::new((t * 0.2).sin() * 1.0, 3.2, 10.6), Vec3::new(0.0, 2.1, 0.0), 40f32)
+fn camera(mode: u32, aspect: f32, p: &SceneParams) -> (Mat4, Vec3) {
+    let (eye0, target, fov) = if mode == 0 {
+        (Vec3::new(0.0, 3.2, 10.6), Vec3::new(0.0, 2.1, 0.0), 40f32)
     } else {
-        (Vec3::new((t * 0.15).sin() * 0.8, 3.6, 6.5), Vec3::new(0.0, 1.0, -9.5), 52f32)
+        (Vec3::new(0.0, 3.6, 6.5), Vec3::new(0.0, 1.0, -9.5), 52f32)
     };
+    // orbit around the target: spherical offset + user yaw/pitch/zoom
+    let v = eye0 - target;
+    let r = v.length() * p.zoom.clamp(0.35, 3.0);
+    let phi = v.x.atan2(v.z) + p.yaw;
+    let min_el = (0.5 - target.y).max(-r * 0.9) / r; // keep the eye above the floor
+    let th = ((v.y / v.length()).asin() + p.pitch).clamp(min_el.asin(), 1.5);
+    let eye = target + r * Vec3::new(th.cos() * phi.sin(), th.sin(), th.cos() * phi.cos());
     (perspective(fov.to_radians(), aspect, 0.1, 100.0) * look_at(eye, target), eye)
 }
 
@@ -457,7 +468,7 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
 
         let p = &self.params;
         let aspect = w as f32 / h as f32;
-        let (vp, eye) = camera(p.mode, aspect, p.time);
+        let (vp, eye) = camera(p.mode, aspect, p);
         let pack = |a: &[f32; 11]| {
             let mut o = [[0f32; 4]; 3];
             for (i, v) in a.iter().enumerate() {

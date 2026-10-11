@@ -30,6 +30,9 @@ pub struct App {
     dirty_since: Option<std::time::Instant>,
     shot: Option<(String, f64)>, // GEQ_SHOT=path[,seconds]: save a screenshot of this window and exit
     shot_sent: bool,
+    yaw: f32,
+    pitch: f32,
+    zoom: f32,
     fps_frames: u32,
     fps_t0: f64,
 }
@@ -72,6 +75,9 @@ impl App {
                 (path, p.next().and_then(|s| s.parse().ok()).unwrap_or(6.0))
             }),
             shot_sent: false,
+            yaw: 0.0,
+            pitch: 0.0,
+            zoom: 1.0,
             fps_frames: 0,
             fps_t0: 0.0,
         }
@@ -131,6 +137,10 @@ impl eframe::App for App {
         }
         if let Ok(v) = std::env::var("GEQ_SCENE") {
             self.cfg.scene = v.parse().unwrap_or(0);
+        }
+        if let Ok(v) = std::env::var("GEQ_ORBIT") {
+            let mut p = v.split(',').filter_map(|s| s.parse::<f32>().ok());
+            (self.yaw, self.pitch) = (p.next().unwrap_or(0.0), p.next().unwrap_or(0.0));
         }
         if let Ok(v) = std::env::var("GEQ_THEME") {
             self.cfg.theme = v.parse().unwrap_or(0);
@@ -258,7 +268,22 @@ impl eframe::App for App {
         // ------------------------------------------------------------------ scene
         egui::CentralPanel::default().frame(egui::Frame::NONE).show_inside(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
-            ui.allocate_rect(rect, egui::Sense::hover());
+            let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+            if resp.dragged() {
+                let d = resp.drag_delta();
+                self.yaw -= d.x * 0.006;
+                self.pitch += d.y * 0.006;
+            }
+            if resp.hovered() {
+                let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
+                self.zoom = (self.zoom * (1.0 - scroll * 0.0015)).clamp(0.35, 3.0);
+            }
+            if resp.double_clicked() {
+                (self.yaw, self.pitch, self.zoom) = (0.0, 0.0, 1.0);
+            }
+            if resp.hovered() || resp.dragged() {
+                ctx.set_cursor_icon(if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+            }
             let ppp = ctx.pixels_per_point();
             let size_px = [(rect.width() * ppp) as u32, (rect.height() * ppp) as u32];
 
@@ -288,6 +313,9 @@ impl eframe::App for App {
                     bass: self.bass,
                     levels,
                     peaks,
+                    yaw: self.yaw,
+                    pitch: self.pitch,
+                    zoom: self.zoom,
                 },
                 size_px,
                 rows,
