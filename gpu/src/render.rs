@@ -6,7 +6,7 @@ use eframe::egui_wgpu::{self, CallbackResources, ScreenDescriptor};
 use eframe::wgpu::{self, util::DeviceExt};
 use glam::{Mat4, Vec3};
 
-pub const HIST_W: u32 = 96;
+pub const HIST_W: u32 = crate::analyzer::CURVE_POINTS as u32;
 pub const HIST_H: u32 = 256;
 const SCENE_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEPTH_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -124,7 +124,9 @@ impl Gpu {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Gpu {
         let scene_sh = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("scene"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("scene.wgsl").replace("const NX: u32 = 96u;", &format!("const NX: u32 = {HIST_W}u;")).into(),
+            ),
         });
         let post_sh = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("post"),
@@ -549,7 +551,7 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
                 pass.set_pipeline(&gpu.wfloor_pipe);
                 pass.draw(0..6, 0..1);
                 pass.set_pipeline(&gpu.ter_pipe);
-                pass.draw(0..(95 * 191 * 6), 0..1);
+                pass.draw(0..((HIST_W - 1) * 191 * 6), 0..1);
                 pass.set_pipeline(&gpu.wall_pipe);
                 pass.draw(0..6, 0..1);
             }

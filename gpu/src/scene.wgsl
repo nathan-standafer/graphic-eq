@@ -14,6 +14,7 @@ const COL_SPACING: f32 = 1.35;
 const COL_MAX_H: f32 = 6.0;
 const NX: u32 = 96u;
 const NZ: u32 = 192u;
+const TER_H: f32 = 4.4;  // terrain and glass-wall height at full scale
 
 fn lvl(i: u32) -> f32 { return u.levels[i / 4u][i % 4u]; }
 fn pk(i: u32) -> f32 { return u.peaks[i / 4u][i % 4u]; }
@@ -175,7 +176,7 @@ fn hist_h(xi: u32, zi: u32) -> f32 {
   let zi = cz + o.y;
   let h = hist_h(xi, zi);
   let fz = f32(zi) / f32(NZ - 1u);
-  let w = vec3<f32>((f32(xi) / f32(NX - 1u) - 0.5) * 19.0, h * 5.5, -(f32(zi) + u.res.z) * 0.11);
+  let w = vec3<f32>((f32(xi) / f32(NX - 1u) - 0.5) * 19.0, h * TER_H, -(f32(zi) + u.res.z) * 0.11);
   var out: TerOut;
   out.pos = u.vp * vec4<f32>(w, 1.0);
   out.cell = vec2<f32>(f32(xi), f32(zi));
@@ -194,7 +195,7 @@ fn line(v: f32) -> f32 {
   let depth = clamp(in.cell.y / f32(NZ - 1u), 0.0, 1.0);
   let fade = pow(1.0 - depth, 1.6);
   let aa = 1.0 - smoothstep(0.45, 0.9, max(fwidth(in.cell.y), fwidth(in.cell.x)));  // fade lines that get sub-pixel
-  let wire = max(line(in.cell.y), 0.35 * line(in.cell.x)) * aa;
+  let wire = max(line(in.cell.y), 0.35 * line(in.cell.x * 0.5)) * aa;
   let col = palette(clamp(in.h * 1.15, 0.0, 1.0), in.cell.x / f32(NX - 1u));
   var c = vec3<f32>(0.006, 0.008, 0.016) + col * 0.05 * shade * in.h;
   c += col * wire * (0.55 + 2.6 * in.h) * fade;
@@ -225,7 +226,7 @@ fn line(v: f32) -> f32 {
 }
 
 // ------------------------------------------- glass wall at time 0 (front of the waterfall)
-const WALL_H: f32 = 5.6;
+const WALL_H: f32 = TER_H;
 struct WallOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> };
 @vertex fn vs_wall(@builtin(vertex_index) vi: u32) -> WallOut {
   var q = array<vec2<f32>, 6>(

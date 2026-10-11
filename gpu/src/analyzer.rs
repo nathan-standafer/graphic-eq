@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 pub const FFT_SIZE: usize = 8192;
 pub const HOP: usize = 480; // 10 ms at 48 kHz -> ~100 updates/s
-pub const CURVE_POINTS: usize = 96;
+pub const CURVE_POINTS: usize = 192;
 pub const FLOOR_DB: f32 = -140.0;
 const CAL_DB: f32 = 3.01; // so that a sine at -6 dBFS reads -6 dB
 
@@ -60,9 +60,14 @@ impl Analyzer {
             let wsq: f32 = window.iter().map(|w| w * w).sum();
             let bin_hz = bands::SAMPLE_RATE / FFT_SIZE as f32;
             let band_edges: Vec<(f32, f32)> = bands::FREQS.iter().map(|f| bands::edges(*f)).collect();
+            // The waterfall curve uses a narrow window (two point-spacings wide) for real
+            // resolution, scaled to the energy a full band-wide window would collect so levels
+            // stay comparable with the bars.
             let half = bands::step().sqrt();
+            let r = (20000.0f32 / 30.0).powf(1.0 / (CURVE_POINTS as f32 - 1.0));
+            let curve_scale = (half - 1.0 / half) / (r - 1.0 / r);
             let curve_edges: Vec<(f32, f32)> =
-                (0..CURVE_POINTS).map(|i| (curve_freq(i) / half, curve_freq(i) * half)).collect();
+                (0..CURVE_POINTS).map(|i| (curve_freq(i) / r, curve_freq(i) * r)).collect();
 
             let mut ring = vec![0f32; FFT_SIZE];
             let mut head = 0usize;
@@ -110,16 +115,16 @@ impl Analyzer {
                     }
                     cum[i] + (pos - i as f32) * (cum[i + 1] - cum[i])
                 };
-                let db = |(lo, hi): (f32, f32)| -> f32 {
-                    let e = energy(hi) - energy(lo);
+                let db = |(lo, hi): (f32, f32), scale: f32| -> f32 {
+                    let e = (energy(hi) - energy(lo)) * scale;
                     if e > 1e-14 { (10.0 * e.log10() + CAL_DB).max(FLOOR_DB) } else { FLOOR_DB }
                 };
                 let mut lv = Levels::default();
                 for (i, e) in band_edges.iter().enumerate() {
-                    lv.bands[i] = db(*e);
+                    lv.bands[i] = db(*e, 1.0);
                 }
                 for (i, e) in curve_edges.iter().enumerate() {
-                    lv.curve[i] = db(*e);
+                    lv.curve[i] = db(*e, curve_scale);
                 }
                 seq += 1;
                 lv.seq = seq;
