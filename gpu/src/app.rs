@@ -302,48 +302,39 @@ impl eframe::App for App {
     }
 }
 
+/// A row of mutually exclusive choices (no nested popups, which would close the parent menu).
+fn choice<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(T, &str)]) -> bool {
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        for (v, label) in options {
+            if ui.selectable_label(*value == *v, *label).clicked() && *value != *v {
+                *value = *v;
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
 impl App {
     fn options_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Display", |ui| {
-            ui.set_min_width(260.0);
+            ui.set_min_width(300.0);
             let mut touched = false;
-            ui.label(RichText::new("DISPLAY").small().weak());
+            ui.label(RichText::new("SCENE").small().weak());
+            touched |= choice(ui, &mut self.cfg.scene, &[(0, "3D columns"), (1, "Waterfall")]);
+            ui.add_space(4.0);
+            ui.label(RichText::new("COLORS").small().weak());
+            let themes: Vec<(u32, &str)> = THEMES.iter().enumerate().map(|(i, n)| (i as u32, *n)).collect();
+            touched |= choice(ui, &mut self.cfg.theme, &themes);
+            ui.add_space(4.0);
+            ui.label(RichText::new("RANGE").small().weak());
+            touched |= choice(ui, &mut self.cfg.range, &[(40.0, "40 dB"), (60.0, "60 dB"), (80.0, "80 dB")]);
+            ui.add_space(4.0);
+            ui.label(RichText::new("FALL SPEED").small().weak());
+            touched |= choice(ui, &mut self.cfg.fall, &[(0, "Slow"), (1, "Medium"), (2, "Fast")]);
+            ui.add_space(4.0);
             egui::Grid::new("opts").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
-                ui.label("Scene");
-                egui::ComboBox::from_id_salt("scene")
-                    .selected_text(["3D columns", "Waterfall"][self.cfg.scene as usize % 2])
-                    .show_ui(ui, |ui| {
-                        touched |= ui.selectable_value(&mut self.cfg.scene, 0, "3D columns").changed();
-                        touched |= ui.selectable_value(&mut self.cfg.scene, 1, "Waterfall").changed();
-                    });
-                ui.end_row();
-                ui.label("Colors");
-                egui::ComboBox::from_id_salt("theme")
-                    .selected_text(THEMES[self.cfg.theme as usize % 5])
-                    .show_ui(ui, |ui| {
-                        for (i, n) in THEMES.iter().enumerate() {
-                            touched |= ui.selectable_value(&mut self.cfg.theme, i as u32, *n).changed();
-                        }
-                    });
-                ui.end_row();
-                ui.label("Range");
-                egui::ComboBox::from_id_salt("range")
-                    .selected_text(format!("{} dB", self.cfg.range))
-                    .show_ui(ui, |ui| {
-                        for r in [40.0, 60.0, 80.0] {
-                            touched |= ui.selectable_value(&mut self.cfg.range, r, format!("{r} dB")).changed();
-                        }
-                    });
-                ui.end_row();
-                ui.label("Fall speed");
-                egui::ComboBox::from_id_salt("fall")
-                    .selected_text(["Slow", "Medium", "Fast"][self.cfg.fall as usize % 3])
-                    .show_ui(ui, |ui| {
-                        for (i, n) in ["Slow", "Medium", "Fast"].iter().enumerate() {
-                            touched |= ui.selectable_value(&mut self.cfg.fall, i as u32, *n).changed();
-                        }
-                    });
-                ui.end_row();
                 ui.label("Glow");
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.bloom, 0.0..=2.0)).changed();
                 ui.end_row();
@@ -355,43 +346,31 @@ impl App {
                 ui.end_row();
             });
             ui.separator();
-            ui.label(RichText::new("AUDIO").small().weak());
-            egui::Grid::new("aopts").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
-                ui.label("Analyze");
-                let mut pre = self.cfg.source_pre;
-                egui::ComboBox::from_id_salt("source")
-                    .selected_text(if pre { "Before EQ" } else { "After EQ" })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut pre, false, "After EQ (what you hear)");
-                        ui.selectable_value(&mut pre, true, "Before EQ (what apps send)");
-                    });
-                if pre != self.cfg.source_pre {
-                    self.cfg.source_pre = pre;
-                    self.audio.set_source_pre(pre);
-                    touched = true;
+            ui.label(RichText::new("ANALYZE").small().weak());
+            let mut pre = self.cfg.source_pre;
+            choice(ui, &mut pre, &[(false, "After EQ (what you hear)"), (true, "Before EQ")]);
+            if pre != self.cfg.source_pre {
+                self.cfg.source_pre = pre;
+                self.audio.set_source_pre(pre);
+                touched = true;
+            }
+            ui.add_space(4.0);
+            ui.label(RichText::new("OUTPUT DEVICE").small().weak());
+            if self.sinks.is_empty() {
+                self.sinks = routing::list_sinks();
+            }
+            let current = self.audio.real_sink.clone().unwrap_or_default();
+            let mut pick: Option<String> = None;
+            for (name, desc) in &self.sinks {
+                if ui.selectable_label(*name == current, desc).clicked() && *name != current {
+                    pick = Some(name.clone());
                 }
-                ui.end_row();
-                ui.label("Output device");
-                if self.sinks.is_empty() {
-                    self.sinks = routing::list_sinks();
-                }
-                let current = self.audio.real_sink.clone().unwrap_or_default();
-                let shown = self.sinks.iter().find(|(n, _)| *n == current).map(|(_, d)| d.clone()).unwrap_or(current.clone());
-                let mut pick: Option<String> = None;
-                egui::ComboBox::from_id_salt("out").selected_text(shown).width(220.0).show_ui(ui, |ui| {
-                    for (name, desc) in &self.sinks {
-                        if ui.selectable_label(*name == current, desc).clicked() {
-                            pick = Some(name.clone());
-                        }
-                    }
-                });
-                if let Some(n) = pick {
-                    self.cfg.output = Some(n.clone());
-                    self.audio.set_output(n);
-                    touched = true;
-                }
-                ui.end_row();
-            });
+            }
+            if let Some(n) = pick {
+                self.cfg.output = Some(n.clone());
+                self.audio.set_output(n);
+                touched = true;
+            }
             if touched {
                 self.touch();
             }
