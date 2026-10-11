@@ -51,6 +51,8 @@ pub struct SceneParams {
     pub yaw: f32,
     pub pitch: f32,
     pub zoom: f32,
+    /// Middle-drag translation in screen points (scaled by view distance).
+    pub pan: [f32; 2],
 }
 
 pub struct SceneCallback {
@@ -435,6 +437,12 @@ fn camera(mode: u32, aspect: f32, p: &SceneParams) -> (Mat4, Vec3) {
     let min_el = (0.5 - target.y).max(-r * 0.9) / r; // keep the eye above the floor
     let th = ((v.y / v.length()).asin() + p.pitch).clamp(min_el.asin(), 1.5);
     let eye = target + r * Vec3::new(th.cos() * phi.sin(), th.sin(), th.cos() * phi.cos());
+    // translate eye and target together along the camera's right/up axes
+    let f = (target - eye).normalize();
+    let right = f.cross(Vec3::Y).normalize();
+    let up = right.cross(f);
+    let shift = (-right * p.pan[0] + up * p.pan[1]) * r * 0.0011;
+    let (eye, target) = (eye + shift, target + shift);
     (perspective(fov.to_radians(), aspect, 0.1, 100.0) * look_at(eye, target), eye)
 }
 

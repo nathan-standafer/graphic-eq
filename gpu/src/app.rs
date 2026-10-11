@@ -33,6 +33,7 @@ pub struct App {
     yaw: f32,
     pitch: f32,
     zoom: f32,
+    pan: [f32; 2],
     fps_frames: u32,
     fps_t0: f64,
 }
@@ -78,6 +79,7 @@ impl App {
             yaw: 0.0,
             pitch: 0.0,
             zoom: 1.0,
+            pan: [0.0; 2],
             fps_frames: 0,
             fps_t0: 0.0,
         }
@@ -141,6 +143,10 @@ impl eframe::App for App {
         if let Ok(v) = std::env::var("GEQ_ORBIT") {
             let mut p = v.split(',').filter_map(|s| s.parse::<f32>().ok());
             (self.yaw, self.pitch) = (p.next().unwrap_or(0.0), p.next().unwrap_or(0.0));
+        }
+        if let Ok(v) = std::env::var("GEQ_PAN") {
+            let mut p = v.split(',').filter_map(|s| s.parse::<f32>().ok());
+            self.pan = [p.next().unwrap_or(0.0), p.next().unwrap_or(0.0)];
         }
         if let Ok(v) = std::env::var("GEQ_THEME") {
             self.cfg.theme = v.parse().unwrap_or(0);
@@ -269,17 +275,22 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show_inside(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
             let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
-            if resp.dragged() {
+            if resp.dragged_by(egui::PointerButton::Primary) {
                 let d = resp.drag_delta();
                 self.yaw -= d.x * 0.006;
                 self.pitch += d.y * 0.006;
+            }
+            if resp.dragged_by(egui::PointerButton::Middle) {
+                let d = resp.drag_delta();
+                self.pan[0] += d.x;
+                self.pan[1] += d.y;
             }
             if resp.hovered() {
                 let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
                 self.zoom = (self.zoom * (1.0 - scroll * 0.0015)).clamp(0.35, 3.0);
             }
             if resp.double_clicked() {
-                (self.yaw, self.pitch, self.zoom) = (0.0, 0.0, 1.0);
+                (self.yaw, self.pitch, self.zoom, self.pan) = (0.0, 0.0, 1.0, [0.0; 2]);
             }
             if resp.hovered() || resp.dragged() {
                 ctx.set_cursor_icon(if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
@@ -316,6 +327,7 @@ impl eframe::App for App {
                     yaw: self.yaw,
                     pitch: self.pitch,
                     zoom: self.zoom,
+                    pan: self.pan,
                 },
                 size_px,
                 rows,
