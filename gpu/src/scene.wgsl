@@ -223,3 +223,34 @@ fn line(v: f32) -> f32 {
   c = mix(vec3<f32>(0.004, 0.005, 0.012), c, fade);
   return vec4<f32>(c, 1.0);
 }
+
+// ------------------------------------------- glass wall at time 0 (front of the waterfall)
+const WALL_H: f32 = 5.6;
+struct WallOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> };
+@vertex fn vs_wall(@builtin(vertex_index) vi: u32) -> WallOut {
+  var q = array<vec2<f32>, 6>(
+    vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+    vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+  let c = q[vi];
+  let w = vec3<f32>(mix(-9.5, 9.5, c.x), c.y * WALL_H, 0.03);
+  return WallOut(u.vp * vec4<f32>(w, 1.0), w);
+}
+@fragment fn fs_wall(in: WallOut) -> @location(0) vec4<f32> {
+  let col = palette(0.3, 0.5);
+  // live spectrum at time 0 (newest history row), interpolated across bins
+  let fx = clamp((in.wp.x / 19.0 + 0.5) * f32(NX - 1u), 0.0, f32(NX - 1u) - 0.001);
+  let i0 = u32(floor(fx));
+  let h = mix(hist_h(i0, 0u), hist_h(i0 + 1u, 0u), fract(fx)) * WALL_H;
+  let y = in.wp.y;
+  let px = fwidth(y);
+  let curve = 1.0 - smoothstep(0.0, 2.2 * px, abs(y - h));
+  let below = select(0.0, 1.0, y < h);
+  // level lines every 1/6 of the height
+  let lv = gridline(y / (WALL_H / 6.0));
+  // frame
+  let ex = min(in.wp.x + 9.5, 9.5 - in.wp.x);
+  let frame = max(1.0 - smoothstep(0.0, 0.05, ex), max(1.0 - smoothstep(0.0, 2.0 * px, y), 1.0 - smoothstep(0.0, 2.0 * px, WALL_H - y)));
+  var rgb = col * (0.25 * lv + 0.9 * frame + 3.0 * curve + 0.35 * below);
+  let a = clamp(0.045 + 0.10 * below + 0.25 * lv + 0.7 * frame + 0.95 * curve, 0.0, 1.0);
+  return vec4<f32>(rgb, a);
+}

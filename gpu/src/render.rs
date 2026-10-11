@@ -99,6 +99,7 @@ pub struct Gpu {
     floor_pipe: wgpu::RenderPipeline,
     ter_pipe: wgpu::RenderPipeline,
     wfloor_pipe: wgpu::RenderPipeline,
+    wall_pipe: wgpu::RenderPipeline,
     bright_pipe: wgpu::RenderPipeline,
     blur_pipe: wgpu::RenderPipeline,
     down_pipe: wgpu::RenderPipeline,
@@ -145,7 +146,7 @@ impl Gpu {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -238,6 +239,7 @@ impl Gpu {
         let col_pipe = scene_pipe("col", "vs_col", "fs_col", true, false, true);
         let floor_pipe = scene_pipe("floor", "vs_floor", "fs_floor", false, false, true);
         let ter_pipe = scene_pipe("ter", "vs_ter", "fs_ter", true, false, false);
+        let wall_pipe = scene_pipe("wall", "vs_wall", "fs_wall", false, false, true);
         let wfloor_pipe = scene_pipe("wfloor", "vs_wfloor", "fs_wfloor", true, false, false);
 
         let post_pipe = |label: &str, fs: &str| {
@@ -323,7 +325,7 @@ impl Gpu {
 
         Gpu {
             scene_bgl, post_bgl, comp_bgl, sampler, uniform_buf, scene_bg, hist_tex, head: 0, total_rows: 0,
-            bg_pipe, col_pipe, floor_pipe, ter_pipe, wfloor_pipe, bright_pipe, blur_pipe, down_pipe, comp_pipe,
+            bg_pipe, col_pipe, floor_pipe, ter_pipe, wfloor_pipe, wall_pipe, bright_pipe, blur_pipe, down_pipe, comp_pipe,
             targets: None,
         }
     }
@@ -548,6 +550,8 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
                 pass.draw(0..6, 0..1);
                 pass.set_pipeline(&gpu.ter_pipe);
                 pass.draw(0..(95 * 191 * 6), 0..1);
+                pass.set_pipeline(&gpu.wall_pipe);
+                pass.draw(0..6, 0..1);
             }
         }
 
