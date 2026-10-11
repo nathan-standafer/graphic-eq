@@ -158,13 +158,20 @@ struct TerOut {
   @location(0) cell: vec2<f32>,
   @location(1) h: f32,
   @location(2) wp: vec3<f32>,
+  @location(3) @interpolate(flat) ch: u32,
 };
-fn hist_h(xi: u32, zi: u32) -> f32 {
+fn hist_h2(xi: u32, zi: u32) -> vec2<f32> {
   let rows = i32(u.rows);
   let row = (i32(u.head) - i32(zi) + rows) % rows;
-  return textureLoad(hist, vec2<i32>(i32(xi), row), 0).r;
+  return textureLoad(hist, vec2<i32>(i32(xi), row), 0).rg;
 }
-@vertex fn vs_ter(@builtin(vertex_index) vi: u32) -> TerOut {
+fn hist_h(xi: u32, zi: u32, ch: u32) -> f32 {
+  let v = hist_h2(xi, zi);
+  return select(v.x, v.y, ch == 1u);
+}
+const STEREO_L: vec3<f32> = vec3<f32>(0.05, 0.85, 1.0);
+const STEREO_R: vec3<f32> = vec3<f32>(1.0, 0.12, 0.80);
+@vertex fn vs_ter(@builtin(vertex_index) vi: u32, @builtin(instance_index) ch: u32) -> TerOut {
   var cs = array<vec2<u32>, 6>(
     vec2<u32>(0u, 0u), vec2<u32>(1u, 0u), vec2<u32>(0u, 1u),
     vec2<u32>(1u, 0u), vec2<u32>(1u, 1u), vec2<u32>(0u, 1u));
@@ -174,7 +181,7 @@ fn hist_h(xi: u32, zi: u32) -> f32 {
   let cz = cell / (NX - 1u);
   let xi = cx + o.x;
   let zi = cz + o.y;
-  let h = hist_h(xi, zi);
+  let h = hist_h(xi, zi, ch);
   let fz = f32(zi) / f32(NZ - 1u);
   let w = vec3<f32>((f32(xi) / f32(NX - 1u) - 0.5) * 19.0, h * TER_H, -(f32(zi) + u.res.z) * 0.11);
   var out: TerOut;
@@ -182,6 +189,7 @@ fn hist_h(xi: u32, zi: u32) -> f32 {
   out.cell = vec2<f32>(f32(xi), f32(zi));
   out.h = h;
   out.wp = w;
+  out.ch = ch;
   return out;
 }
 fn line(v: f32) -> f32 {
@@ -196,6 +204,11 @@ fn line(v: f32) -> f32 {
   let fade = pow(1.0 - depth, 1.6);
   let aa = 1.0 - smoothstep(0.45, 0.9, max(fwidth(in.cell.y), fwidth(in.cell.x)));  // fade lines that get sub-pixel
   let wire = max(line(in.cell.y), 0.35 * line(in.cell.x * 0.5)) * aa;
+  if (u.mode > 1.5) {
+    // stereo overlay: additive wireframe, left = cyan, right = magenta
+    let base = select(STEREO_L, STEREO_R, in.ch == 1u);
+    return vec4<f32>(base * wire * (0.10 + 0.50 * in.h) * fade, 1.0);
+  }
   let col = palette(clamp(in.h * 1.15, 0.0, 1.0), in.cell.x / f32(NX - 1u));
   var c = vec3<f32>(0.006, 0.008, 0.016) + col * 0.05 * shade * in.h;
   c += col * wire * (0.55 + 2.6 * in.h) * fade;
@@ -237,21 +250,26 @@ struct WallOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> }
   return WallOut(u.vp * vec4<f32>(w, 1.0), w);
 }
 @fragment fn fs_wall(in: WallOut) -> @location(0) vec4<f32> {
+  let stereo = u.mode > 1.5;
   let col = palette(0.3, 0.5);
-  // live spectrum at time 0 (newest history row), interpolated across bins
+  // live spectrum at time 0 (newest history row), interpolated across bins; R = left/mixed, G = right
   let fx = clamp((in.wp.x / 19.0 + 0.5) * f32(NX - 1u), 0.0, f32(NX - 1u) - 0.001);
   let i0 = u32(floor(fx));
-  let h = mix(hist_h(i0, 0u), hist_h(i0 + 1u, 0u), fract(fx)) * WALL_H;
+  let hh = mix(hist_h2(i0, 0u), hist_h2(i0 + 1u, 0u), fract(fx)) * WALL_H;
   let y = in.wp.y;
   let px = fwidth(y);
-  let curve = 1.0 - smoothstep(0.0, 2.2 * px, abs(y - h));
-  let below = select(0.0, 1.0, y < h);
-  // level lines every 1/6 of the height
+  let curve_l = 1.0 - smoothstep(0.0, 2.2 * px, abs(y - hh.x));
+  let curve_r = select(0.0, 1.0 - smoothstep(0.0, 2.2 * px, abs(y - hh.y)), stereo);
+  let below_l = select(0.0, 1.0, y < hh.x);
+  let below_r = select(0.0, select(0.0, 1.0, y < hh.y), stereo);
   let lv = gridline(y / (WALL_H / 6.0));
-  // frame
   let ex = min(in.wp.x + 9.5, 9.5 - in.wp.x);
   let frame = max(1.0 - smoothstep(0.0, 0.05, ex), max(1.0 - smoothstep(0.0, 2.0 * px, y), 1.0 - smoothstep(0.0, 2.0 * px, WALL_H - y)));
-  var rgb = col * (0.25 * lv + 0.9 * frame + 3.0 * curve + 0.7 * below);
-  let a = clamp(0.045 + 0.32 * below + 0.25 * lv + 0.7 * frame + 0.95 * curve, 0.0, 1.0);
+  let cl = select(col, STEREO_L, stereo);
+  let kb = select(1.0, 0.5, stereo);   // two fills overlap in stereo, so each is lighter
+  var rgb = col * (0.25 * lv + 0.9 * frame)
+          + cl * (3.0 * curve_l + 0.7 * kb * below_l)
+          + STEREO_R * (3.0 * curve_r + 0.7 * kb * below_r);
+  let a = clamp(0.045 + 0.32 * max(below_l, below_r) + 0.25 * lv + 0.7 * frame + 0.95 * max(curve_l, curve_r), 0.0, 1.0);
   return vec4<f32>(rgb, a);
 }

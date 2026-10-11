@@ -24,6 +24,8 @@ pub struct App {
     peak: [f32; bands::COUNT],
     peak_age: [f32; bands::COUNT],
     curve: [f32; CURVE_POINTS],
+    curve_l: [f32; CURVE_POINTS],
+    curve_r: [f32; CURVE_POINTS],
     bass: f32,
     hist_acc: f32,
     sinks: Vec<(String, String)>,
@@ -66,6 +68,8 @@ impl App {
             peak: [FLOOR_DB; bands::COUNT],
             peak_age: [0.0; bands::COUNT],
             curve: [FLOOR_DB; CURVE_POINTS],
+            curve_l: [FLOOR_DB; CURVE_POINTS],
+            curve_r: [FLOOR_DB; CURVE_POINTS],
             bass: 0.0,
             hist_acc: 0.0,
             sinks: Vec::new(),
@@ -113,10 +117,14 @@ impl App {
                 }
             }
         }
-        for i in 0..CURVE_POINTS {
-            let r = lv.curve[i];
-            self.curve[i] = if r >= self.curve[i] { r } else { (self.curve[i] - fall * dt).max(r) };
-        }
+        let smooth = |disp: &mut [f32; CURVE_POINTS], raw: &[f32; CURVE_POINTS]| {
+            for i in 0..CURVE_POINTS {
+                disp[i] = if raw[i] >= disp[i] { raw[i] } else { (disp[i] - fall * dt).max(raw[i]) };
+            }
+        };
+        smooth(&mut self.curve, &lv.curve);
+        smooth(&mut self.curve_l, &lv.curve_l);
+        smooth(&mut self.curve_r, &lv.curve_r);
         let bass_now = (0..3).map(|i| self.frac(self.disp[i])).sum::<f32>() / 3.0;
         let k = if bass_now > self.bass { 0.5 } else { 0.08 };
         self.bass += (bass_now - self.bass) * k;
@@ -147,6 +155,9 @@ impl eframe::App for App {
         if let Ok(v) = std::env::var("GEQ_PAN") {
             let mut p = v.split(',').filter_map(|s| s.parse::<f32>().ok());
             self.pan = [p.next().unwrap_or(0.0), p.next().unwrap_or(0.0)];
+        }
+        if std::env::var_os("GEQ_STEREO").is_some() {
+            self.cfg.stereo = true;
         }
         if let Ok(v) = std::env::var("GEQ_THEME") {
             self.cfg.theme = v.parse().unwrap_or(0);
@@ -304,9 +315,13 @@ impl eframe::App for App {
             let mut rows = Vec::new();
             while self.hist_acc >= 1.0 / HISTORY_RATE {
                 self.hist_acc -= 1.0 / HISTORY_RATE;
-                let mut row = [0u8; HIST_W as usize];
-                for (k, v) in self.curve.iter().enumerate() {
-                    row[k] = (self.frac(*v) * 255.0) as u8;
+                // Rg8 row: R = left (or the mixed signal), G = right (or the same mixed signal)
+                let stereo = self.cfg.scene == 1 && self.cfg.stereo;
+                let mut row = vec![0u8; HIST_W as usize * 2];
+                for k in 0..HIST_W as usize {
+                    let (l, r) = if stereo { (self.curve_l[k], self.curve_r[k]) } else { (self.curve[k], self.curve[k]) };
+                    row[2 * k] = (self.frac(l) * 255.0) as u8;
+                    row[2 * k + 1] = (self.frac(r) * 255.0) as u8;
                 }
                 rows.push(row);
             }
@@ -319,7 +334,11 @@ impl eframe::App for App {
             let cb = SceneCallback {
                 params: SceneParams {
                     time: ctx.input(|i| i.time) as f32,
-                    mode: self.cfg.scene,
+                    mode: match (self.cfg.scene, self.cfg.stereo) {
+                        (0, _) => 0,
+                        (_, false) => 1,
+                        _ => 2,
+                    },
                     theme: self.cfg.theme,
                     bloom: self.cfg.bloom,
                     bass: self.bass,
@@ -365,6 +384,9 @@ impl App {
             let mut touched = false;
             ui.label(RichText::new("SCENE").small().weak());
             touched |= choice(ui, &mut self.cfg.scene, &[(0, "3D columns"), (1, "Waterfall")]);
+            ui.add_space(4.0);
+            ui.label(RichText::new("WATERFALL CHANNELS").small().weak());
+            touched |= choice(ui, &mut self.cfg.stereo, &[(false, "Mixed"), (true, "Stereo overlay (L cyan / R magenta)")]);
             ui.add_space(4.0);
             ui.label(RichText::new("WATERFALL DETAIL").small().weak());
             touched |= choice(ui, &mut self.cfg.detail, &[(0, "Fine"), (1, "Medium"), (2, "Smooth")]);

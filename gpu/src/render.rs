@@ -60,7 +60,8 @@ pub struct SceneParams {
 pub struct SceneCallback {
     pub params: SceneParams,
     pub size_px: [u32; 2],
-    pub rows: Vec<[u8; HIST_W as usize]>,
+    /// New history rows: HIST_W left bytes interleaved with HIST_W right bytes (Rg8).
+    pub rows: Vec<Vec<u8>>,
 }
 
 struct Targets {
@@ -98,6 +99,7 @@ pub struct Gpu {
     col_pipe: wgpu::RenderPipeline,
     floor_pipe: wgpu::RenderPipeline,
     ter_pipe: wgpu::RenderPipeline,
+    ter_st_pipe: wgpu::RenderPipeline,
     wfloor_pipe: wgpu::RenderPipeline,
     wall_pipe: wgpu::RenderPipeline,
     bright_pipe: wgpu::RenderPipeline,
@@ -204,7 +206,7 @@ impl Gpu {
         let post_layout = layout(&post_bgl);
         let comp_layout = layout(&comp_bgl);
 
-        let scene_pipe = |label: &str, vs: &str, fs: &str, depth_write: bool, always: bool, blend: bool| {
+        let scene_pipe = |label: &str, vs: &str, fs: &str, depth_write: bool, always: bool, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&scene_layout),
@@ -220,7 +222,7 @@ impl Gpu {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: SCENE_FMT,
-                        blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -237,12 +239,23 @@ impl Gpu {
                 cache: None,
             })
         };
-        let bg_pipe = scene_pipe("bg", "vs_bg", "fs_bg", false, true, false);
-        let col_pipe = scene_pipe("col", "vs_col", "fs_col", true, false, true);
-        let floor_pipe = scene_pipe("floor", "vs_floor", "fs_floor", false, false, true);
-        let ter_pipe = scene_pipe("ter", "vs_ter", "fs_ter", true, false, false);
-        let wall_pipe = scene_pipe("wall", "vs_wall", "fs_wall", false, false, true);
-        let wfloor_pipe = scene_pipe("wfloor", "vs_wfloor", "fs_wfloor", true, false, false);
+        let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
+        let additive = Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent::OVER,
+        });
+        let bg_pipe = scene_pipe("bg", "vs_bg", "fs_bg", false, true, None);
+        let col_pipe = scene_pipe("col", "vs_col", "fs_col", true, false, alpha);
+        let floor_pipe = scene_pipe("floor", "vs_floor", "fs_floor", false, false, alpha);
+        let ter_pipe = scene_pipe("ter", "vs_ter", "fs_ter", true, false, None);
+        // stereo overlay: both channels' wireframes add together, no occlusion between them
+        let ter_st_pipe = scene_pipe("ter_st", "vs_ter", "fs_ter", false, false, additive);
+        let wall_pipe = scene_pipe("wall", "vs_wall", "fs_wall", false, false, alpha);
+        let wfloor_pipe = scene_pipe("wfloor", "vs_wfloor", "fs_wfloor", true, false, None);
 
         let post_pipe = |label: &str, fs: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -311,7 +324,7 @@ impl Gpu {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: wgpu::TextureFormat::Rg8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -327,7 +340,7 @@ impl Gpu {
 
         Gpu {
             scene_bgl, post_bgl, comp_bgl, sampler, uniform_buf, scene_bg, hist_tex, head: 0, total_rows: 0,
-            bg_pipe, col_pipe, floor_pipe, ter_pipe, wfloor_pipe, wall_pipe, bright_pipe, blur_pipe, down_pipe, comp_pipe,
+            bg_pipe, col_pipe, floor_pipe, ter_pipe, ter_st_pipe, wfloor_pipe, wall_pipe, bright_pipe, blur_pipe, down_pipe, comp_pipe,
             targets: None,
         }
     }
@@ -479,7 +492,7 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
                     aspect: wgpu::TextureAspect::All,
                 },
                 row,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(HIST_W), rows_per_image: Some(1) },
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(HIST_W * 2), rows_per_image: Some(1) },
                 wgpu::Extent3d { width: HIST_W, height: 1, depth_or_array_layers: 1 },
             );
         }
@@ -550,8 +563,13 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
             } else {
                 pass.set_pipeline(&gpu.wfloor_pipe);
                 pass.draw(0..6, 0..1);
-                pass.set_pipeline(&gpu.ter_pipe);
-                pass.draw(0..((HIST_W - 1) * 191 * 6), 0..1);
+                if p.mode == 2 {
+                    pass.set_pipeline(&gpu.ter_st_pipe);
+                    pass.draw(0..((HIST_W - 1) * 191 * 6), 0..2); // left, right
+                } else {
+                    pass.set_pipeline(&gpu.ter_pipe);
+                    pass.draw(0..((HIST_W - 1) * 191 * 6), 0..1);
+                }
                 pass.set_pipeline(&gpu.wall_pipe);
                 pass.draw(0..6, 0..1);
             }
