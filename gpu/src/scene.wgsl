@@ -10,7 +10,9 @@ struct U {
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var hist: texture_2d<f32>;
 
+const BG: vec3<f32> = vec3<f32>(0.005, 0.006, 0.013);
 const COL_SPACING: f32 = 1.35;
+const FLOOR_EXTENT: f32 = 600.0;   // effectively infinite; fogged out long before the edge
 const COL_MAX_H: f32 = 6.0;
 const NX: u32 = 96u;
 const NZ: u32 = 192u;
@@ -45,11 +47,7 @@ struct BgOut { @builtin(position) pos: vec4<f32> };
   return BgOut(vec4<f32>(p[vi], 1.0, 1.0));
 }
 @fragment fn fs_bg(in: BgOut) -> @location(0) vec4<f32> {
-  let uv = in.pos.xy / u.res.xy;
-  let r = length((uv - vec2<f32>(0.5, 0.62)) * vec2<f32>(u.aspect, 1.0));
-  var c = mix(vec3<f32>(0.004, 0.005, 0.012), vec3<f32>(0.030, 0.026, 0.065), 1.0 - uv.y);
-  c += palette(0.45, 0.5) * (0.035 + 0.22 * u.bass) * exp(-r * r * 4.0);
-  return vec4<f32>(c, 1.0);
+  return vec4<f32>(BG, 1.0);
 }
 
 // ------------------------------------------------------------------- columns
@@ -129,7 +127,7 @@ struct FloorOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> 
     vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
     vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
   let c = q[vi];
-  let w = vec3<f32>(mix(-18.0, 18.0, c.x), -0.002, mix(-12.0, 8.0, c.y));
+  let w = vec3<f32>(mix(-FLOOR_EXTENT, FLOOR_EXTENT, c.x), -0.002, mix(-FLOOR_EXTENT, FLOOR_EXTENT, c.y));
   return FloorOut(u.vp * vec4<f32>(w, 1.0), w);
 }
 fn gridline(v: f32) -> f32 {
@@ -137,19 +135,24 @@ fn gridline(v: f32) -> f32 {
   let w = fwidth(v);
   return 1.0 - smoothstep(0.0, 1.5 * w + 1e-4, d);
 }
+// Fade grid lines out once they get too thin to resolve (kills shimmer toward the horizon).
+fn line_aa(fw: f32) -> f32 { return 1.0 - smoothstep(0.25, 0.55, fw); }
+
 @fragment fn fs_floor(in: FloorOut) -> @location(0) vec4<f32> {
-  var c = vec3<f32>(0.012, 0.014, 0.026);
-  let fade = 1.0 - smoothstep(5.0, 17.0, length(in.wp.xz * vec2<f32>(0.55, 1.0)));
-  let g = max(gridline(in.wp.x / COL_SPACING), gridline(in.wp.z));
-  c += palette(0.35, 0.5) * g * 0.22 * fade;
+  let dist = length(in.wp - u.cam.xyz);
+  let fade = 1.0 - smoothstep(18.0, 120.0, dist);
+  let gx = in.wp.x / COL_SPACING;
+  let aa = line_aa(max(fwidth(gx), fwidth(in.wp.z)));
+  let g = max(gridline(gx), gridline(in.wp.z)) * aa;
+  var c = vec3<f32>(0.012, 0.014, 0.026) + palette(0.35, 0.5) * g * 0.26;
   var glow = vec3<f32>(0.0);
   for (var i = 0u; i < 11u; i++) {
     let cx = (f32(i) - 5.0) * COL_SPACING;
     let d = length(in.wp.xz - vec2<f32>(cx, 0.0));
     glow += palette(lvl(i) * 0.8, f32(i) / 10.0) * lvl(i) * exp(-d * d * 0.30);
   }
-  c += glow * 0.9 * fade;
-  return vec4<f32>(c, 0.80);
+  c += glow * 0.9;
+  return vec4<f32>(mix(BG, c, fade), 0.80);
 }
 
 // ------------------------------------------------------------------- terrain
@@ -212,7 +215,7 @@ fn line(v: f32) -> f32 {
   let col = palette(clamp(in.h * 1.15, 0.0, 1.0), in.cell.x / f32(NX - 1u));
   var c = vec3<f32>(0.006, 0.008, 0.016) + col * 0.05 * shade * in.h;
   c += col * wire * (0.55 + 2.6 * in.h) * fade;
-  c = mix(vec3<f32>(0.004, 0.005, 0.012), c, fade);
+  c = mix(BG, c, fade);
   return vec4<f32>(c, 1.0);
 }
 
@@ -222,20 +225,20 @@ fn line(v: f32) -> f32 {
     vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
     vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
   let c = q[vi];
-  let w = vec3<f32>(mix(-9.5, 9.5, c.x), -0.004, mix(4.0, -21.1, c.y));
+  let w = vec3<f32>(mix(-FLOOR_EXTENT, FLOOR_EXTENT, c.x), -0.004, mix(-FLOOR_EXTENT, FLOOR_EXTENT, c.y));
   return FloorOut(u.vp * vec4<f32>(w, 1.0), w);
 }
 @fragment fn fs_wfloor(in: FloorOut) -> @location(0) vec4<f32> {
   // same coordinates as the terrain: x spacing 19/95 per bin, z spacing 0.11 per history row,
   // lines every 5 bins / 5 rows, scrolling with the history
-  let zc = -in.wp.z / 0.11 - u.res.z - u.res.w;
-  let g = max(gridline(in.wp.x / 1.0), gridline(zc / 5.0));
-  let depth = clamp(-in.wp.z / 21.1, 0.0, 1.0);
-  let fade = pow(1.0 - depth, 1.4) * (1.0 - smoothstep(8.0, 9.5, abs(in.wp.x)));
-  let col = palette(0.25, 0.5);
-  var c = vec3<f32>(0.005, 0.007, 0.014) + col * g * 0.55 * fade;
-  c = mix(vec3<f32>(0.004, 0.005, 0.012), c, fade);
-  return vec4<f32>(c, 1.0);
+  let zc = (-in.wp.z / 0.11 - u.res.z - u.res.w) / 5.0;
+  let gx = in.wp.x / 1.0;
+  let aa = line_aa(max(fwidth(gx), fwidth(zc)));
+  let g = max(gridline(gx), gridline(zc)) * aa;
+  let dist = length(in.wp - u.cam.xyz);
+  let fade = 1.0 - smoothstep(20.0, 130.0, dist);
+  var c = vec3<f32>(0.005, 0.007, 0.014) + palette(0.25, 0.5) * g * 0.55;
+  return vec4<f32>(mix(BG, c, fade), 1.0);
 }
 
 // ------------------------------------------- glass wall at time 0 (front of the waterfall)
