@@ -2,7 +2,7 @@ use crate::analyzer::{Levels, CURVE_POINTS, FLOOR_DB};
 use crate::audio::Audio;
 use crate::bands;
 use crate::clock;
-use crate::modulation::{Modulation, Signals};
+use crate::modulation::{Modulation, PeakHits, Signals};
 use crate::presets::{self, Idle, Look};
 use crate::render::{Draw, Gpu, PostLook, SceneCallback, BLOOM_LEVELS, HIST_W};
 use crate::routing;
@@ -113,6 +113,9 @@ pub struct App {
     sig: Signals,
     levels_f: [f32; 11],
     peaks_f: [f32; 11],
+    /// Peak-cap pushes (see `modulation::PeakHits`) and the bursts due this frame.
+    peak_tracker: PeakHits,
+    peak_hits: [f32; 11],
     now: f64,
     last_wall: f64,
     stepped: Option<f32>,
@@ -138,7 +141,7 @@ pub struct App {
 }
 
 fn blank_signals() -> Signals {
-    Signals { fx: [0.0; 4], sus: [0.0; 4], gate: 0.0, rings: [[0.0; 4]; 8] }
+    Signals { fx: [0.0; 4], sus: [0.0; 4], gate: 0.0, rings: [[0.0; 4]; 8], hits: [[0.0; 4]; crate::modulation::HIT_CAP] }
 }
 
 impl App {
@@ -207,6 +210,12 @@ impl App {
         if let Ok(v) = std::env::var("GEQ_BLOOM") {
             cfg.bloom = v.parse().unwrap_or(cfg.bloom);
         }
+        if let Ok(v) = std::env::var("GEQ_DENSITY") {
+            cfg.density = v.parse().unwrap_or(cfg.density);
+        }
+        if std::env::var("GEQ_SPARKS").map_or(false, |v| v == "0") {
+            cfg.sparks = false;
+        }
         if let Some(secs) = std::env::var("GEQ_CYCLE").ok().and_then(|v| v.parse::<f32>().ok()) {
             cfg.auto_cycle = true;
             cfg.cycle_secs = secs;
@@ -237,6 +246,8 @@ impl App {
             sig: blank_signals(),
             levels_f: [0.0; 11],
             peaks_f: [0.0; 11],
+            peak_tracker: PeakHits::new(),
+            peak_hits: [0.0; 11],
             now: 0.0,
             last_wall: clock::now(),
             stepped,
@@ -323,6 +334,8 @@ impl App {
             self.levels_f[i] = self.frac(self.disp[i]);
             self.peaks_f[i] = if self.cfg.peak_caps { self.frac(self.peak[i]) } else { 0.0 };
         }
+        let caps: [f32; 11] = std::array::from_fn(|i| self.frac(self.peak[i]));
+        self.peak_hits = self.peak_tracker.update(&caps, self.now, dt);
     }
 
     // ------------------------------------------------------------------ looks and scenes
@@ -448,6 +461,10 @@ impl App {
             cam,
             row_frac: (self.hist_acc * HISTORY_RATE).clamp(0.0, 1.0),
             persist: self.cfg.persistence,
+            sparks: self.cfg.sparks,
+            density: self.cfg.density,
+            hits: sig.hits,
+            peak_hits: self.peak_hits,
         }
     }
 
@@ -1196,6 +1213,16 @@ impl App {
                     }
                     Control::PeakCaps => {
                         ui.checkbox(&mut self.cfg.peak_caps, "Peak hold").changed().then(|| touched = true);
+                    }
+                    Control::Sparks => {
+                        ui.checkbox(&mut self.cfg.sparks, "Sparks").on_hover_text("Embers off the lit columns, and sparks when a peak cap rises").changed().then(|| touched = true);
+                    }
+                    Control::Density => {
+                        ui.label(RichText::new("PARTICLES").small().weak());
+                        touched |= ui
+                            .add(egui::Slider::new(&mut self.cfg.density, 0.25..=1.5).text("density"))
+                            .on_hover_text("How many particles the fountain launches")
+                            .changed();
                     }
                     Control::ScopePersistence => {
                         ui.label(RichText::new("PERSISTENCE").small().weak());

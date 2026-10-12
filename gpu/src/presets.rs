@@ -2,7 +2,7 @@
 //! scene. They are separate from the EQ presets and never touch gains, bypass or routing.
 
 use crate::render::BLOOM_LEVELS;
-use crate::scenes::{COLUMNS, TUNNEL, VECTORSCOPE, WATERFALL};
+use crate::scenes::{COLUMNS, FOUNTAIN, TUNNEL, VECTORSCOPE, WATERFALL};
 
 /// Idle camera path amplitudes at Motion = 1: yaw, pitch (radians), dolly (fraction), roll (radians).
 #[derive(Clone, Copy)]
@@ -35,8 +35,9 @@ const TERRAIN_IDLE: Idle = Idle { yaw: 0.07, pitch: 0.02, zoom: 0.04, roll: 0.0 
 const TUNNEL_IDLE: Idle = Idle { yaw: 0.06, pitch: 0.04, zoom: 0.05, roll: 0.07 };
 /// The scope is a flat instrument: nothing drifts.
 const SCOPE_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
+const FOUNTAIN_IDLE: Idle = Idle { yaw: 0.07, pitch: 0.02, zoom: 0.04, roll: 0.0 };
 
-pub const LOOKS: [Look; 14] = [
+pub const LOOKS: [Look; 18] = [
     // ---- columns
     Look {
         scene: COLUMNS, name: "Studio", theme: 0, exposure: 1.0,
@@ -110,6 +111,27 @@ pub const LOOKS: [Look; 14] = [
         scene: VECTORSCOPE, name: "Neon Lissajous", theme: 3, exposure: 0.95,
         bloom: [0.34, 0.38, 0.30, 0.20, 0.12, 0.07], threshold: 0.85, knee: 0.5, vignette: 0.55,
         motion: 0.0, flash: 0.8, idle: SCOPE_IDLE,
+    },
+    // ---- fountain: bright small sprites want a tight halo and little broad glow, or the spray turns to fog
+    Look {
+        scene: FOUNTAIN, name: "Ice Geyser", theme: 2, exposure: 1.0,
+        bloom: [0.32, 0.34, 0.24, 0.14, 0.08, 0.04], threshold: 0.85, knee: 0.5, vignette: 0.55,
+        motion: 0.5, flash: 0.8, idle: FOUNTAIN_IDLE,
+    },
+    Look {
+        scene: FOUNTAIN, name: "Ember Fountain", theme: 1, exposure: 1.0,
+        bloom: [0.30, 0.34, 0.28, 0.18, 0.10, 0.05], threshold: 0.8, knee: 0.5, vignette: 0.6,
+        motion: 0.5, flash: 0.8, idle: FOUNTAIN_IDLE,
+    },
+    Look {
+        scene: FOUNTAIN, name: "Neon Spray", theme: 3, exposure: 0.95,
+        bloom: [0.32, 0.36, 0.26, 0.16, 0.09, 0.05], threshold: 0.85, knee: 0.5, vignette: 0.55,
+        motion: 0.5, flash: 0.8, idle: FOUNTAIN_IDLE,
+    },
+    Look {
+        scene: FOUNTAIN, name: "Spectrum Jets", theme: 4, exposure: 0.9,
+        bloom: [0.30, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.9, knee: 0.5, vignette: 0.5,
+        motion: 0.5, flash: 0.7, idle: FOUNTAIN_IDLE,
     },
 ];
 

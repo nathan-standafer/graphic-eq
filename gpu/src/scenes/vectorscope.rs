@@ -421,7 +421,7 @@ impl Scene for Vectorscope {
         }
     }
 
-    fn uses_update(&self) -> bool {
+    fn uses_update(&self, _p: &SceneParams) -> bool {
         true
     }
 

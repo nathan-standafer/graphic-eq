@@ -9,6 +9,9 @@ use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 
 pub mod columns;
+pub mod fountain;
+pub mod particles;
+pub mod sparks;
 pub mod tunnel;
 pub mod vectorscope;
 pub mod waterfall;
@@ -18,7 +21,8 @@ pub const COLUMNS: u32 = 0;
 pub const WATERFALL: u32 = 1;
 pub const TUNNEL: u32 = 2;
 pub const VECTORSCOPE: u32 = 3;
-pub const ALL: [u32; 4] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE];
+pub const FOUNTAIN: u32 = 4;
+pub const ALL: [u32; 5] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN];
 
 pub const DEPTH_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const MSAA: u32 = 4;
@@ -99,6 +103,14 @@ pub struct SceneParams {
     pub row_frac: f32,
     /// Phosphor persistence in seconds (the vectorscope's afterglow).
     pub persist: f32,
+    /// Sparks overlay on the 3D columns.
+    pub sparks: bool,
+    /// Particle density multiplier (fountain emission, a quality setting).
+    pub density: f32,
+    /// Onset events that arrived this frame (band, strength, centroid, 0); unused slots are zero.
+    pub hits: [[f32; 4]; 4],
+    /// Per column: how far its peak cap rose this frame in a burst-worthy push (0 = no burst).
+    pub peak_hits: [f32; 11],
 }
 
 /// What `update` and `draw` see besides the pipeline state: the frame's parameters and target size.
@@ -112,6 +124,8 @@ pub struct Frame<'a> {
     pub wave: &'a [[f32; 2]],
     /// This draw's uniform bind group (group 0), for scenes that run their own passes in `update`.
     pub bg: &'a wgpu::BindGroup,
+    /// Like `ts`, for a scene whose `update` is a compute pass.
+    pub ts_compute: Option<wgpu::ComputePassTimestampWrites<'a>>,
     /// Counts frames; a scene that sees it skip knows it missed some of `wave`. A scene drawn twice in
     /// one frame (a crossfade between two looks of it) sees the same number both times.
     pub frame_no: u64,
@@ -137,6 +151,10 @@ pub enum Control {
     WaterfallDetail,
     /// Phosphor afterglow time of the vectorscope.
     ScopePersistence,
+    /// Embers and sparks over the 3D columns.
+    Sparks,
+    /// How many particles the fountain launches.
+    Density,
 }
 
 pub struct SceneInfo {
@@ -149,13 +167,13 @@ pub struct SceneInfo {
     pub cost_ms: f32,
 }
 
-const INFOS: [SceneInfo; 4] = [
+const INFOS: [SceneInfo; 5] = [
     SceneInfo {
         id: COLUMNS,
         name: "3D columns",
         cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
-        controls: &[Control::PeakCaps],
-        cost_ms: 2.1,
+        controls: &[Control::PeakCaps, Control::Sparks],
+        cost_ms: 2.4,
     },
     SceneInfo {
         id: WATERFALL,
@@ -179,6 +197,13 @@ const INFOS: [SceneInfo; 4] = [
         controls: &[Control::ScopePersistence],
         cost_ms: 1.0,
     },
+    SceneInfo {
+        id: FOUNTAIN,
+        name: "Fountain",
+        cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
+        controls: &[Control::Density],
+        cost_ms: 2.7,
+    },
 ];
 
 pub fn info(id: u32) -> &'static SceneInfo {
@@ -190,8 +215,8 @@ pub fn info(id: u32) -> &'static SceneInfo {
 pub trait Scene: Send + Sync {
     /// Offscreen work before the main pass: simulation steps, compute, persistence.
     fn update(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue, _enc: &mut wgpu::CommandEncoder, _f: &Frame) {}
-    /// Whether `update` runs a render pass worth timing (it gets `Frame::ts`).
-    fn uses_update(&self) -> bool {
+    /// Whether `update` runs a pass worth timing this frame (it gets `Frame::ts` or `Frame::ts_compute`).
+    fn uses_update(&self, _p: &SceneParams) -> bool {
         false
     }
     /// Draw into the HDR scene pass (bind group 0 is already set).
@@ -280,6 +305,7 @@ fn create(id: u32, ctx: &Ctx) -> Box<dyn Scene> {
         WATERFALL => Box::new(waterfall::Waterfall::new(ctx)),
         TUNNEL => Box::new(tunnel::Tunnel::new(ctx)),
         VECTORSCOPE => Box::new(vectorscope::Vectorscope::new(ctx)),
+        FOUNTAIN => Box::new(fountain::Fountain::new(ctx)),
         _ => Box::new(columns::Columns::new(ctx)),
     }
 }

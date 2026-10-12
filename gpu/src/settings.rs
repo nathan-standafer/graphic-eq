@@ -24,7 +24,7 @@ pub struct Settings {
     pub gains: [f32; 11],
     pub preset: String,
     pub eq_on: bool,
-    pub scene: u32,       // 0 columns, 1 waterfall, 2 tunnel, 3 vectorscope (stable IDs)
+    pub scene: u32,       // 0 columns, 1 waterfall, 2 tunnel, 3 vectorscope, 4 fountain (stable IDs)
     pub theme: u32,       // 0 classic, 1 amber, 2 ice, 3 neon, 4 rainbow
     pub range: f32,       // dB below full scale shown
     pub sensitivity: f32, // dB added to what is drawn
@@ -38,8 +38,10 @@ pub struct Settings {
     pub motion: f32,      // camera and geometry movement, 0 = still
     pub flash: f32,       // onset accents and flashes, 0 = none
     #[serde(deserialize_with = "looks_compat")]
-    pub look: [u32; 4],   // selected visual preset per scene
+    pub look: [u32; SCENES], // selected visual preset per scene
     pub persistence: f32, // vectorscope phosphor afterglow, seconds
+    pub sparks: bool,     // columns: embers and sparks over the columns
+    pub density: f32,     // fountain particle density (1 = the designed amount)
     pub favorites: Vec<String>,
     pub variants: BTreeMap<String, Variant>,
     pub crossfade: bool,
@@ -47,10 +49,12 @@ pub struct Settings {
     pub cycle_secs: f32,
 }
 
-/// Settings files from before the fourth scene hold three looks; the new scene takes its first.
-fn looks_compat<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u32; 4], D::Error> {
+/// Scenes with their own saved look. Older settings files hold fewer; the new ones take their first look.
+pub const SCENES: usize = crate::scenes::ALL.len();
+
+fn looks_compat<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u32; SCENES], D::Error> {
     let v = Vec::<u32>::deserialize(d)?;
-    let mut out = [0u32; 4];
+    let mut out = [0u32; SCENES];
     for (o, x) in out.iter_mut().zip(v) {
         *o = x;
     }
@@ -76,8 +80,10 @@ impl Default for Settings {
             output: None,
             motion: 0.7,
             flash: 0.8,
-            look: [0; 4],
+            look: [0; SCENES],
             persistence: 0.25,
+            sparks: true,
+            density: 1.0,
             favorites: Vec::new(),
             variants: BTreeMap::new(),
             crossfade: true,
@@ -135,13 +141,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn old_settings_with_three_looks_still_load() {
+    fn old_settings_with_fewer_looks_still_load() {
         let s: Settings = serde_json::from_str(r#"{"scene": 2, "look": [1, 2, 3], "bloom": 1.2}"#).unwrap();
-        assert_eq!(s.look, [1, 2, 3, 0]);
+        assert_eq!(s.look, [1, 2, 3, 0, 0]);
         assert_eq!(s.scene, 2);
         assert!((s.bloom - 1.2).abs() < 1e-6);
         assert!((s.persistence - 0.25).abs() < 1e-6, "new fields take their defaults");
+        assert!(s.sparks && (s.density - 1.0).abs() < 1e-6);
         let s: Settings = serde_json::from_str(r#"{"look": [0, 1, 2, 3]}"#).unwrap();
-        assert_eq!(s.look, [0, 1, 2, 3]);
+        assert_eq!(s.look, [0, 1, 2, 3, 0]);
+        let s: Settings = serde_json::from_str(r#"{"look": [0, 1, 2, 3, 4], "sparks": false}"#).unwrap();
+        assert_eq!(s.look, [0, 1, 2, 3, 4]);
+        assert!(!s.sparks);
     }
 }

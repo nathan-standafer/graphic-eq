@@ -1,13 +1,16 @@
 use super::*;
+use super::sparks::Sparks;
 
 /// Eleven LED columns, one per EQ band: segmented cores inside glass housings on dark plinths,
-/// standing on a glossy floor that reflects the lit segments softly.
+/// standing on a glossy floor that reflects the lit segments softly. Optional embers and sparks (see
+/// `sparks.rs`) fly off the tops of the lit columns.
 pub struct Columns {
     floor: wgpu::RenderPipeline,
     reflection: wgpu::RenderPipeline,
     core: wgpu::RenderPipeline,
     plinth: wgpu::RenderPipeline,
     glass: wgpu::RenderPipeline,
+    sparks: Sparks,
 }
 
 /// Instance ranges: 11 each of core, glass, plinth, reflection.
@@ -25,6 +28,7 @@ impl Columns {
             core: ctx.pipeline(&sh, "col_core", "vs_col", "fs_core", Pipe::OPAQUE),
             plinth: ctx.pipeline(&sh, "col_plinth", "vs_col", "fs_plinth", Pipe::OPAQUE),
             glass: ctx.pipeline(&sh, "col_glass", "vs_col", "fs_glass", glass),
+            sparks: Sparks::new(ctx),
         }
     }
 
@@ -36,7 +40,21 @@ impl Columns {
 }
 
 impl Scene for Columns {
-    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, _f: &Frame) {
+    fn update(&mut self, _device: &wgpu::Device, queue: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, f: &Frame) {
+        if f.p.sparks {
+            self.sparks.update(queue, enc, f);
+        }
+    }
+
+    fn uses_update(&self, p: &SceneParams) -> bool {
+        p.sparks
+    }
+
+    fn reset(&mut self, seed: u64) {
+        self.sparks.reset(seed);
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, f: &Frame) {
         pass.set_pipeline(&self.floor);
         pass.draw(0..6, 0..1);
         pass.set_pipeline(&self.reflection);
@@ -47,6 +65,9 @@ impl Scene for Columns {
         pass.draw(0..BOX, 22..33);
         pass.set_pipeline(&self.glass);
         pass.draw(0..BOX, 11..22);
+        if f.p.sparks {
+            self.sparks.draw(pass);
+        }
     }
 
     fn camera(&self, aspect: f32, p: &SceneParams) -> (Mat4, Vec3) {

@@ -127,13 +127,13 @@ impl Gpu {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -458,6 +458,14 @@ impl GpuTimer {
         })
     }
 
+    fn compute_writes(&self, slot: Option<u32>) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
+        slot.map(|i| wgpu::ComputePassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: Some(2 * i),
+            end_of_pass_write_index: Some(2 * i + 1),
+        })
+    }
+
     fn end_frame(&mut self, enc: &mut wgpu::CommandEncoder) {
         let n = self.names.len() as u32 * 2;
         if n == 0 {
@@ -604,11 +612,12 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
             queue.write_buffer(&slot.ubuf[k.min(1)], 0, bytemuck::bytes_of(&u));
 
             // scenes may do offscreen work first; reserve the timing slots before borrowing the timer
-            let upd_slot = if slot.scene.uses_update() { gpu.timer.as_mut().and_then(|tm| tm.slot("scene_upd")) } else { None };
+            let upd_slot = if slot.scene.uses_update(p) { gpu.timer.as_mut().and_then(|tm| tm.slot("scene_upd")) } else { None };
             let main_slot = gpu.timer.as_mut().and_then(|tm| tm.slot(if k == 0 { "scene" } else { "scene_in" }));
             let ts_upd = gpu.timer.as_ref().and_then(|tm| tm.writes(upd_slot));
+            let ts_cmp = gpu.timer.as_ref().and_then(|tm| tm.compute_writes(upd_slot));
             let ts = gpu.timer.as_ref().and_then(|tm| tm.writes(main_slot));
-            let frame = Frame { p, size: [w, h], aspect, wave: &self.wave, bg: &slot.bg[k.min(1)], frame_no, ts: ts_upd };
+            let frame = Frame { p, size: [w, h], aspect, wave: &self.wave, bg: &slot.bg[k.min(1)], frame_no, ts: ts_upd, ts_compute: ts_cmp };
             slot.scene.update(device, queue, encoder, &frame);
 
             let target = if !two { &t.scene_view } else if k == 0 { &t.out_a } else { &t.out_b };

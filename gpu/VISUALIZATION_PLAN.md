@@ -642,8 +642,8 @@ about 4 ms median (12 ms worst) after a detection delay of up to one 10 ms hop.
   draws little wall relief; rings, breathing and lamp level follow the normalized envelopes and stay
   alive. The Sensitivity setting is the intended control for the walls.
 
-**Not done yet** (as planned): the per-bin pan frame (F2d), compute particles (F4), render scale (F5),
-optional beat timing, and the later scenes.
+**Not done yet** (as planned): the per-bin pan frame (F2d), render scale (F5), optional beat timing, and
+the later scenes.
 
 ## Milestone 2: Phosphor Vectorscope (scene 3)
 
@@ -684,3 +684,59 @@ The first instrument scene, with the two pieces of plumbing it needed.
 With about 400 segments a frame at 120 fps (3 draws each) the beam pass costs 0.35-0.4 ms; the full-screen
 persistence fade and the composite make up the rest. A scene cycle through all four scenes held 120.0 fps
 with live crossfades for every pair that fits the budget.
+
+## Milestone 3: Sparks and Fountain (scene 6)
+
+F4, compute particles, and the two things the plan hangs on it.
+
+**Shipped**
+
+- F4: `scenes/particles.rs` and three shader pieces. One storage buffer is a ring of particles (48 bytes
+  each: position and life, velocity and total life, four scene-defined values). The CPU hands out the next
+  `n` ring slots each frame, split into a continuous stream and up to six bursts; a compute pass integrates
+  every particle that can be alive and rebirths the slots it was told to, drawing each spawn's randomness
+  from a hash of its serial number, so a run repeats exactly (the capture tests below). Because a particle
+  lives at most `max_life` seconds, everything alive sits in a contiguous stretch of the ring behind the
+  head; both the compute dispatch and the draw cover only that stretch, so a quiet sky costs nothing.
+  Draw is vertex pulling from the same buffer: each particle is a streak (a Gaussian dot dragged along its
+  screen-space velocity, so fast ones read as motion at 120 Hz), additive. A scene that is skipped for
+  twenty frames starts again from an empty sky. The shared uniform group became visible to compute, and
+  `Frame` gained a compute timestamp slot.
+- Fountain (scene 4): 262,144 particles. The newest spectrum row is the emitter line: a spawn picks an
+  emitter by rejection sampling (accept with probability level squared, eight tries, so the jets thin out
+  with the signal) and launches up at a speed set by the level, so apex height follows the bin. Bass is
+  large and heavy, treble small and scattered. Gravity, a gentle divergence-free wind (the curl of sines),
+  a floor bounce with a splash flash, and a settle rule. Onsets throw bursts of a size set by band
+  (`modulation::Signals::hits`: events above a per-band strength, rate limited). It is a non-MSAA scene
+  with analytic grid lines, mirrored in the floor by a second draw. Four looks; a density slider.
+- Sparks (an overlay on the columns): 16,384 particles on the same machinery, drawn inside the columns'
+  multisampled pass so their depth hides what is behind them. Embers shed from the top of each lit strip
+  (a column is chosen by running weights the CPU sends), sparks burst from a peak cap when it rises
+  (`modulation::PeakHits` turns the cap's per-frame creep into discrete, rate-limited bursts, since a
+  cap sitting at its peak would otherwise count as a push every frame). A Display-menu checkbox.
+
+**Measured** (5120x1440, real time, the demo signal's loudest seconds, and the dense fixture)
+
+| Scene | fps | frame median / p99 | Scene GPU | Compute |
+|-------|-----|--------------------|-----------|---------|
+| Fountain, density 1.0 | 120.0 | 8.33 / 9.0 ms | 2.5 ms | 0.01-0.02 ms |
+| Fountain, density 1.5 | 120.0 | 8.33 / 9.1 ms | 3.7 ms | 0.02 ms |
+| 3D columns with Sparks (without) | 120.0 | 8.33 / 10 ms | 2.2 ms (2.1) | 0.01 ms |
+
+(The demo signal's quiet intro makes the fountain look cheap, about 1.1 ms; the table is the dense fixture,
+which is its worst case.)
+
+**Findings worth keeping**
+
+- Particle density, not particle count, is the design variable. The first version emitted 52,000 a second
+  and was a white cloud at every setting; what reads as a fountain is a few thousand alive at a time, with
+  streaks long enough to show the arcs. The continuous rate (2,600 a second at full energy) and burst sizes
+  (450 / 150 / 250) are small by design, and "capacity" in the plan is just headroom for the density slider.
+- Bursts, not the stream, set the density. The synthetic demo fires about 11 onsets a second at strengths
+  near the 2.0 cap; burst counts that looked modest per hit were three times the continuous stream per
+  second. Always budget bursts per second.
+- The cost is fragment fill, not the simulation. The compute pass is 0.02 ms for 262k particles; trimming
+  the streak quads' margins from 5 sigma to 4 sigma cut the fountain's loudest cost by a third (3.15 to
+  2.05 ms). An early measurement on the demo's quiet intro said 1.1 ms; the hint needs the loudest second.
+- Two looks of one scene crossfading draw its particles twice but simulate once, so the pair costs two
+  draws; the compositor's frozen-outgoing fallback now covers fountain-to-fountain and fountain-to-columns.
