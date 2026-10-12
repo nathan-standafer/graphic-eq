@@ -2,7 +2,7 @@
 //! scene. They are separate from the EQ presets and never touch gains, bypass or routing.
 
 use crate::render::BLOOM_LEVELS;
-use crate::scenes::{COLUMNS, TUNNEL, WATERFALL};
+use crate::scenes::{COLUMNS, TUNNEL, VECTORSCOPE, WATERFALL};
 
 /// Idle camera path amplitudes at Motion = 1: yaw, pitch (radians), dolly (fraction), roll (radians).
 #[derive(Clone, Copy)]
@@ -33,8 +33,10 @@ pub struct Look {
 const COLUMN_IDLE: Idle = Idle { yaw: 0.10, pitch: 0.03, zoom: 0.05, roll: 0.0 };
 const TERRAIN_IDLE: Idle = Idle { yaw: 0.07, pitch: 0.02, zoom: 0.04, roll: 0.0 };
 const TUNNEL_IDLE: Idle = Idle { yaw: 0.06, pitch: 0.04, zoom: 0.05, roll: 0.07 };
+/// The scope is a flat instrument: nothing drifts.
+const SCOPE_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
 
-pub const LOOKS: [Look; 10] = [
+pub const LOOKS: [Look; 14] = [
     // ---- columns
     Look {
         scene: COLUMNS, name: "Studio", theme: 0, exposure: 1.0,
@@ -87,6 +89,27 @@ pub const LOOKS: [Look; 10] = [
         scene: TUNNEL, name: "Prism", theme: 4, exposure: 0.9,
         bloom: [0.30, 0.36, 0.30, 0.22, 0.14, 0.08], threshold: 0.9, knee: 0.5, vignette: 0.5,
         motion: 0.7, flash: 0.7, idle: TUNNEL_IDLE,
+    },
+    // ---- vectorscope: a sharp core, a narrow halo and a faint broad glow, the way a phosphor tube blooms
+    Look {
+        scene: VECTORSCOPE, name: "P31 Green", theme: 0, exposure: 1.0,
+        bloom: [0.34, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.8, knee: 0.5, vignette: 0.6,
+        motion: 0.0, flash: 0.7, idle: SCOPE_IDLE,
+    },
+    Look {
+        scene: VECTORSCOPE, name: "Amber Scope", theme: 1, exposure: 1.0,
+        bloom: [0.30, 0.34, 0.30, 0.20, 0.12, 0.07], threshold: 0.8, knee: 0.5, vignette: 0.6,
+        motion: 0.0, flash: 0.7, idle: SCOPE_IDLE,
+    },
+    Look {
+        scene: VECTORSCOPE, name: "Ice Trace", theme: 2, exposure: 1.0,
+        bloom: [0.36, 0.34, 0.24, 0.14, 0.08, 0.04], threshold: 0.8, knee: 0.5, vignette: 0.6,
+        motion: 0.0, flash: 0.8, idle: SCOPE_IDLE,
+    },
+    Look {
+        scene: VECTORSCOPE, name: "Neon Lissajous", theme: 3, exposure: 0.95,
+        bloom: [0.34, 0.38, 0.30, 0.20, 0.12, 0.07], threshold: 0.85, knee: 0.5, vignette: 0.55,
+        motion: 0.0, flash: 0.8, idle: SCOPE_IDLE,
     },
 ];
 

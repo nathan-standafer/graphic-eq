@@ -23,6 +23,7 @@ const PEAK_FALL_DB_PER_S: f32 = 22.0;
 const HISTORY_RATE: f32 = 60.0;
 const THEMES: [&str; 5] = ["Classic green/red", "Amber", "Ice", "Neon", "Rainbow"];
 const FADE_S: f64 = 0.9;
+const LAST_SCENE: usize = scenes::ALL.len() - 1;
 const OVERLAY_VISIBLE_S: f32 = 2.8;
 
 /// A scene with its look resolved: preset defaults plus the user's live changes.
@@ -121,7 +122,7 @@ pub struct App {
     dirty_since: Option<Instant>,
     shot: Option<(String, f64)>, // GEQ_SHOT=path[,seconds]: save a screenshot of this window and exit
     shot_sent: bool,
-    cams: [CamState; 3],
+    cams: [CamState; scenes::ALL.len()],
     idle: IdleCam,
     fullscreen: bool,
     /// GEQ_BARE=1: scene only, no panels or overlay (captures at an exact aspect without going full screen).
@@ -130,7 +131,7 @@ pub struct App {
     last_activity: f64,
     trans: Option<Transition>,
     next_cycle: f64,
-    built: [bool; 3],
+    built: [bool; scenes::ALL.len()],
     diag: Diag,
     thumbs: Thumbs,
     browser_open: bool,
@@ -197,7 +198,7 @@ impl App {
             cfg.scene = v.parse().unwrap_or(0);
         }
         if let Ok(v) = std::env::var("GEQ_PRESET") {
-            cfg.look[(cfg.scene as usize).min(2)] = v.parse().unwrap_or(0);
+            cfg.look[(cfg.scene as usize).min(LAST_SCENE)] = v.parse().unwrap_or(0);
         }
         let apply_look = shot.is_some() || std::env::var("GEQ_PRESET").is_ok() || std::env::var("GEQ_SETTINGS").map_or(false, |v| v == "default");
         if std::env::var_os("GEQ_STEREO").is_some() {
@@ -210,17 +211,17 @@ impl App {
             cfg.auto_cycle = true;
             cfg.cycle_secs = secs;
         }
-        let mut cams = [CamState::default(); 3];
+        let mut cams = [CamState::default(); scenes::ALL.len()];
         if let Ok(v) = std::env::var("GEQ_ORBIT") {
             let mut p = v.split(',').filter_map(|s| s.parse::<f32>().ok());
-            let s = (cfg.scene as usize).min(2);
+            let s = (cfg.scene as usize).min(LAST_SCENE);
             (cams[s].yaw, cams[s].pitch) = (p.next().unwrap_or(0.0), p.next().unwrap_or(0.0));
         }
         if let Ok(v) = std::env::var("GEQ_PAN") {
             let mut p = v.split(',').filter_map(|s| s.parse::<f32>().ok());
-            cams[(cfg.scene as usize).min(2)].pan = [p.next().unwrap_or(0.0), p.next().unwrap_or(0.0)];
+            cams[(cfg.scene as usize).min(LAST_SCENE)].pan = [p.next().unwrap_or(0.0), p.next().unwrap_or(0.0)];
         }
-        cfg.scene = cfg.scene.min(2);
+        cfg.scene = cfg.scene.min(LAST_SCENE as u32);
 
         let mut app = App {
             cfg,
@@ -253,7 +254,7 @@ impl App {
             last_activity: 0.0,
             trans: None,
             next_cycle: 0.0,
-            built: [false; 3],
+            built: [false; scenes::ALL.len()],
             thumbs: Thumbs::default(),
             browser_open: std::env::var_os("GEQ_BROWSER").is_some(),
             diag: Diag {
@@ -327,7 +328,7 @@ impl App {
     // ------------------------------------------------------------------ looks and scenes
 
     fn look_key(&self, scene: u32) -> (usize, &'static Look) {
-        let idx = self.cfg.look[(scene as usize).min(2)] as usize;
+        let idx = self.cfg.look[(scene as usize).min(LAST_SCENE)] as usize;
         let l = presets::get(scene, idx);
         (idx, l)
     }
@@ -364,8 +365,8 @@ impl App {
     /// Switch scene and/or preset. The incoming scene is built first and the current one keeps
     /// drawing; only then does the crossfade start.
     fn switch(&mut self, frame: &eframe::Frame, scene: u32, preset: Option<usize>) {
-        let preset = preset.unwrap_or(self.cfg.look[(scene as usize).min(2)] as usize);
-        if scene == self.cfg.scene && preset == self.cfg.look[(scene as usize).min(2)] as usize {
+        let preset = preset.unwrap_or(self.cfg.look[(scene as usize).min(LAST_SCENE)] as usize);
+        if scene == self.cfg.scene && preset == self.cfg.look[(scene as usize).min(LAST_SCENE)] as usize {
             return;
         }
         if let Some(ms) = with_gpu(frame, |g, d| g.prepare_scene(d, scene)).flatten() {
@@ -446,6 +447,7 @@ impl App {
             rings: sig.rings,
             cam,
             row_frac: (self.hist_acc * HISTORY_RATE).clamp(0.0, 1.0),
+            persist: self.cfg.persistence,
         }
     }
 
@@ -600,6 +602,7 @@ impl eframe::App for App {
         self.audio.advance(self.now);
         let lv: Levels = self.audio.levels().unwrap_or_default();
         let events = self.audio.take_events();
+        let wave = self.audio.take_wave();
         if self.diag.latency {
             for e in &events {
                 eprintln!("onset band {} strength {:.2} at {:.3}s, delivered {:.1} ms later", e.band, e.strength, e.t, (self.now - e.t) * 1000.0);
@@ -757,7 +760,7 @@ impl eframe::App for App {
             }
             draws.push(Draw { scene: to.scene, p: self.params_for(&to, &self.cams[s], &self.sig) });
             let freeze = self.trans.as_ref().map_or(false, |t| t.frozen && self.frames > t.start_frame);
-            let cb = SceneCallback { draws, mix, freeze_outgoing: freeze, post, time: self.now as f32, size_px, rows };
+            let cb = SceneCallback { draws, mix, freeze_outgoing: freeze, post, time: self.now as f32, size_px, rows, wave };
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, cb));
         });
 
@@ -1193,6 +1196,13 @@ impl App {
                     }
                     Control::PeakCaps => {
                         ui.checkbox(&mut self.cfg.peak_caps, "Peak hold").changed().then(|| touched = true);
+                    }
+                    Control::ScopePersistence => {
+                        ui.label(RichText::new("PERSISTENCE").small().weak());
+                        touched |= ui
+                            .add(egui::Slider::new(&mut self.cfg.persistence, 0.05..=1.0).logarithmic(true).suffix(" s"))
+                            .on_hover_text("How long the phosphor glows after the beam passes")
+                            .changed();
                     }
                 }
                 ui.add_space(4.0);

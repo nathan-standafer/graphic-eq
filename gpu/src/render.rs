@@ -54,6 +54,8 @@ pub struct SceneCallback {
     pub size_px: [u32; 2],
     /// New history rows: HIST_W texels of (left, right, mixed, unused) bytes (Rgba8).
     pub rows: Vec<Vec<u8>>,
+    /// Stereo samples since the previous frame, oldest first.
+    pub wave: Vec<[f32; 2]>,
 }
 
 struct Targets {
@@ -87,6 +89,7 @@ pub struct Gpu {
     hist_view: wgpu::TextureView,
     head: u32,
     total_rows: u32,
+    frame_no: u64,
     mgr: Manager,
     down0_pipe: wgpu::RenderPipeline,
     down_pipe: wgpu::RenderPipeline,
@@ -222,7 +225,7 @@ impl Gpu {
         let hist_view = hist_tex.create_view(&Default::default());
 
         Gpu {
-            scene_bgl, scene_layout, single_bgl, pair_bgl, sampler, hist_tex, hist_view, head: 0, total_rows: 0,
+            scene_bgl, scene_layout, single_bgl, pair_bgl, sampler, hist_tex, hist_view, head: 0, total_rows: 0, frame_no: 0,
             mgr: Manager::new(scenes::ALL.len()),
             down0_pipe, down_pipe, up_pipe, xfade_pipe, comp_pipe,
             targets: None,
@@ -234,7 +237,7 @@ impl Gpu {
     /// Build a scene's pipelines ahead of its first frame. Returns the build time in milliseconds
     /// if anything was built. The caller keeps showing the current scene until this has run.
     pub fn prepare_scene(&mut self, device: &wgpu::Device, id: u32) -> Option<f32> {
-        let ctx = Ctx { device, layout: &self.scene_layout };
+        let ctx = Ctx { device, layout: &self.scene_layout, bgl: &self.scene_bgl };
         self.mgr.ensure(id, &ctx, &self.scene_bgl, &self.hist_view)
     }
 
@@ -527,6 +530,8 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let gpu: &mut Gpu = resources.get_mut().expect("Gpu resources");
+        gpu.frame_no += 1;
+        let frame_no = gpu.frame_no;
         let [w, h] = [self.size_px[0].max(2), self.size_px[1].max(2)];
         for d in &self.draws {
             gpu.prepare_scene(device, d.scene); // normally built ahead of time by the app
@@ -598,13 +603,15 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
             };
             queue.write_buffer(&slot.ubuf[k.min(1)], 0, bytemuck::bytes_of(&u));
 
-            // scenes may do offscreen work first
-            let frame = Frame { p, size: [w, h], aspect };
+            // scenes may do offscreen work first; reserve the timing slots before borrowing the timer
+            let upd_slot = if slot.scene.uses_update() { gpu.timer.as_mut().and_then(|tm| tm.slot("scene_upd")) } else { None };
+            let main_slot = gpu.timer.as_mut().and_then(|tm| tm.slot(if k == 0 { "scene" } else { "scene_in" }));
+            let ts_upd = gpu.timer.as_ref().and_then(|tm| tm.writes(upd_slot));
+            let ts = gpu.timer.as_ref().and_then(|tm| tm.writes(main_slot));
+            let frame = Frame { p, size: [w, h], aspect, wave: &self.wave, bg: &slot.bg[k.min(1)], frame_no, ts: ts_upd };
             slot.scene.update(device, queue, encoder, &frame);
 
             let target = if !two { &t.scene_view } else if k == 0 { &t.out_a } else { &t.out_b };
-            let ts_slot = gpu.timer.as_mut().and_then(|tm| tm.slot(if k == 0 { "scene" } else { "scene_in" }));
-            let ts = gpu.timer.as_ref().and_then(|tm| tm.writes(ts_slot));
             let c = slot.scene.clear_color();
             let mut pass = if slot.scene.wants_msaa() {
                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

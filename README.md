@@ -50,6 +50,13 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   is etched into the surface at zero level, and the walls cast a little light onto the glass, with
   sheen from overhead light bars.
 
+- **Vectorscope** - the raw stereo signal drawn the way an analogue X/Y scope draws it: mono is a vertical
+  line, wide stereo opens into a ball, out-of-phase material tips toward the horizontal. The beam has a
+  sharp core in a soft halo, is bright where it dwells and faint where it races, and leaves a fading
+  phosphor afterglow (Display menu: **Persistence**). On wide screens the left and right waveforms run
+  across the outer thirds as triggered traces. The picture follows the signal's level so quiet music
+  still fills the tube; silence leaves just the graticule.
+
 **Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
 (your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip
 appears on mouse movement and fades after a few seconds. Display menu: looks, colors, **Motion**

@@ -642,5 +642,45 @@ about 4 ms median (12 ms worst) after a detection delay of up to one 10 ms hop.
   draws little wall relief; rings, breathing and lamp level follow the normalized envelopes and stay
   alive. The Sensitivity setting is the intended control for the walls.
 
-**Not done yet** (as planned): waveform feed and persistence (F2a/d, F3), compute particles (F4), render
-scale (F5, not needed by these scenes), optional beat timing, and the later scenes.
+**Not done yet** (as planned): the per-bin pan frame (F2d), compute particles (F4), render scale (F5),
+optional beat timing, and the later scenes.
+
+## Milestone 2: Phosphor Vectorscope (scene 3)
+
+The first instrument scene, with the two pieces of plumbing it needed.
+
+**Shipped**
+
+- F2a, the waveform feed: the analyzer thread queues every stereo sample for the UI exactly once
+  (a bounded queue, swapped out under the lock, so a stalled UI never makes it grow); the synthetic
+  sources do the same. The scene uploads the new samples each frame into a 4096 x 1 `Rgba32Float`
+  ring (left, right, and each channel's trace position) and draws the segments between them.
+- F3, persistence, as the scene's own offscreen pass: a single-sample HDR buffer whose red channel is the
+  fast flash and green the slow afterglow. Each frame it is multiplied by `exp(-dt/tau)` per channel (a
+  full-screen pass with a blend constant, so it is independent of frame rate) and the beam is added on top.
+  The scene shows it through its own composite, so bloom and tone mapping run unchanged. The scene trait
+  gained what this needed: samples in `Frame`, the uniform bind group and a timestamp slot for `update`,
+  and scene-owned bind groups. A scene that is skipped for a frame (a transition, another scene) restarts
+  the beam instead of joining across the gap. Resizing resets the buffer.
+- The beam follows the plan: one instanced quad per sample pair, a closed-form Gaussian integral along the
+  segment (a polynomial `erf`) divided by its length, so it is anti-aliased and bright where it dwells.
+  Each segment is drawn three times for the X/Y scope (X = (R - L)/sqrt2, Y = (L + R)/sqrt2) and the two
+  side traces, which are triggered sweeps on a rising zero crossing that free-run on a signal with none.
+- A display gain follows the recent peak (instant up, six seconds down, limited to 0.55x-24x), so quiet
+  recordings fill the tube and loud ones do not overshoot; it only scales the picture. The signal gate
+  dims the beam on silence. The graticule (rings, axes, tick marks, trace frames) stays on screen when the
+  input stops, and bass onsets flick the outer ring.
+- Four looks (P31 Green, Amber Scope, Ice Trace, Neon Lissajous), a Persistence slider in the Display
+  menu, thumbnails, settings that load files from before the fourth scene (their `look` array grows).
+  The circle stays round at every aspect: the traces take the outer thirds when there is room (21:9 and
+  wider) and 16:9 shows the scope alone.
+
+**Measured** (5120x1440, real time, synthetic demo and dense signals)
+
+| Scene | fps | frame median / p99 | Scene GPU | Bloom GPU |
+|-------|-----|--------------------|-----------|-----------|
+| Vectorscope | 120.0 | 8.33 / 9.2-10.5 ms | 0.95 ms (persistence 0.35-0.4, screen 0.55) | 0.45 ms |
+
+With about 400 segments a frame at 120 fps (3 draws each) the beam pass costs 0.35-0.4 ms; the full-screen
+persistence fade and the composite make up the rest. A scene cycle through all four scenes held 120.0 fps
+with live crossfades for every pair that fits the budget.

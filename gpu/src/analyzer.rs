@@ -322,14 +322,35 @@ impl Dsp {
     }
 }
 
+/// Stereo samples waiting for the UI at most this long (about 170 ms); older ones are dropped, so a
+/// stalled UI never makes the queue grow.
+pub const WAVE_CAP: usize = 8192;
+
 /// State shared between an analysis thread and the UI.
 #[derive(Default)]
 pub struct Shared {
     pub levels: Mutex<Levels>,
     pub events: Mutex<Vec<Onset>>,
+    /// Every sample (left, right) exactly once, oldest first, for scenes that draw the waveform.
+    pub wave: Mutex<Vec<[f32; 2]>>,
 }
 
 impl Shared {
+    /// Queue new samples for the UI.
+    pub fn push_wave(&self, l: &[f32], r: &[f32]) {
+        let mut q = self.wave.lock().unwrap();
+        q.extend(l.iter().zip(r).map(|(a, b)| [*a, *b]));
+        let n = q.len();
+        if n > WAVE_CAP {
+            q.drain(..n - WAVE_CAP);
+        }
+    }
+
+    /// Everything queued since the last call, swapped out so the lock is held only briefly.
+    pub fn take_wave(&self) -> Vec<[f32; 2]> {
+        std::mem::take(&mut *self.wave.lock().unwrap())
+    }
+
     pub fn publish(&self, lv: Option<Levels>, ev: Vec<Onset>) {
         if let Some(lv) = lv {
             *self.levels.lock().unwrap() = lv;
@@ -392,6 +413,7 @@ impl Analyzer {
                 if frames == 0 {
                     continue;
                 }
+                sh.push_wave(&l, &r);
                 let (lv, ev) = dsp.push(&l, &r, t);
                 sh.publish(lv, ev);
             }
@@ -474,6 +496,23 @@ mod tests {
         assert!(lv.seq > 50, "only {} analysis frames in 2.5 s", lv.seq);
         assert!(lv.t > 0.0);
         eprintln!("live: {} frames, bands[0..3] = {:?} dB, corr {:.2}", lv.seq, &lv.bands[..3], lv.fx[3]);
+    }
+
+    #[test]
+    fn waveform_samples_are_delivered_once_and_the_queue_is_bounded() {
+        let sh = Shared::default();
+        sh.push_wave(&[0.1, 0.2, 0.3], &[-0.1, -0.2, -0.3]);
+        sh.push_wave(&[0.4], &[-0.4]);
+        let got = sh.take_wave();
+        assert_eq!(got, vec![[0.1, -0.1], [0.2, -0.2], [0.3, -0.3], [0.4, -0.4]]);
+        assert!(sh.take_wave().is_empty(), "each sample is handed over once");
+        // a stalled consumer never makes the queue grow without bound; the newest samples survive
+        let n = WAVE_CAP + 1000;
+        let l: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        sh.push_wave(&l, &l);
+        let got = sh.take_wave();
+        assert_eq!(got.len(), WAVE_CAP);
+        assert_eq!(got.last().unwrap()[0], (n - 1) as f32);
     }
 
     #[test]

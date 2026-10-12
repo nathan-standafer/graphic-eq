@@ -10,13 +10,15 @@ use std::collections::HashMap;
 
 pub mod columns;
 pub mod tunnel;
+pub mod vectorscope;
 pub mod waterfall;
 
 /// Stable scene IDs; they are persisted in the settings file.
 pub const COLUMNS: u32 = 0;
 pub const WATERFALL: u32 = 1;
 pub const TUNNEL: u32 = 2;
-pub const ALL: [u32; 3] = [COLUMNS, WATERFALL, TUNNEL];
+pub const VECTORSCOPE: u32 = 3;
+pub const ALL: [u32; 4] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE];
 
 pub const DEPTH_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const MSAA: u32 = 4;
@@ -95,14 +97,27 @@ pub struct SceneParams {
     pub cam: CamState,
     /// Fraction (0..1) of the way to the next history row.
     pub row_frac: f32,
+    /// Phosphor persistence in seconds (the vectorscope's afterglow).
+    pub persist: f32,
 }
 
 /// What `update` and `draw` see besides the pipeline state: the frame's parameters and target size.
-#[allow(dead_code)] // size and aspect are for scenes that size offscreen work (persistence, simulation)
+#[allow(dead_code)] // some fields are only for scenes that run offscreen work (persistence, simulation)
 pub struct Frame<'a> {
     pub p: &'a SceneParams,
     pub size: [u32; 2],
     pub aspect: f32,
+    /// Stereo samples (left, right) that arrived since the previous frame, oldest first. Each sample
+    /// is delivered once, so a scene that is not drawn simply misses them.
+    pub wave: &'a [[f32; 2]],
+    /// This draw's uniform bind group (group 0), for scenes that run their own passes in `update`.
+    pub bg: &'a wgpu::BindGroup,
+    /// Counts frames; a scene that sees it skip knows it missed some of `wave`. A scene drawn twice in
+    /// one frame (a crossfade between two looks of it) sees the same number both times.
+    pub frame_no: u64,
+    /// GPU timing for the scene's update pass (only with `GEQ_GPUTIME`, and only for scenes that say
+    /// `uses_update`). Attach it to one render pass.
+    pub ts: Option<wgpu::RenderPassTimestampWrites<'a>>,
 }
 
 // ------------------------------------------------------------------------------- metadata
@@ -120,6 +135,8 @@ pub enum Control {
     PeakCaps,
     WaterfallChannels,
     WaterfallDetail,
+    /// Phosphor afterglow time of the vectorscope.
+    ScopePersistence,
 }
 
 pub struct SceneInfo {
@@ -132,7 +149,7 @@ pub struct SceneInfo {
     pub cost_ms: f32,
 }
 
-const INFOS: [SceneInfo; 3] = [
+const INFOS: [SceneInfo; 4] = [
     SceneInfo {
         id: COLUMNS,
         name: "3D columns",
@@ -154,6 +171,14 @@ const INFOS: [SceneInfo; 3] = [
         controls: &[],
         cost_ms: 2.7,
     },
+    SceneInfo {
+        id: VECTORSCOPE,
+        name: "Vectorscope",
+        // a flat instrument: the camera does not move
+        cam: CamLimits { yaw: 0.0, pitch: (0.0, 0.0), zoom: (1.0, 1.0) },
+        controls: &[Control::ScopePersistence],
+        cost_ms: 1.0,
+    },
 ];
 
 pub fn info(id: u32) -> &'static SceneInfo {
@@ -165,6 +190,10 @@ pub fn info(id: u32) -> &'static SceneInfo {
 pub trait Scene: Send + Sync {
     /// Offscreen work before the main pass: simulation steps, compute, persistence.
     fn update(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue, _enc: &mut wgpu::CommandEncoder, _f: &Frame) {}
+    /// Whether `update` runs a render pass worth timing (it gets `Frame::ts`).
+    fn uses_update(&self) -> bool {
+        false
+    }
     /// Draw into the HDR scene pass (bind group 0 is already set).
     fn draw(&self, pass: &mut wgpu::RenderPass<'_>, f: &Frame);
     /// 2D scenes anti-alias analytically and skip the 4x MSAA target.
@@ -189,7 +218,10 @@ pub trait Scene: Send + Sync {
 /// What scenes need to build pipelines.
 pub struct Ctx<'a> {
     pub device: &'a wgpu::Device,
+    /// The layout every scene pass uses: group 0 is the uniforms and the spectrum history.
     pub layout: &'a wgpu::PipelineLayout,
+    /// Group 0's layout, for scenes that add groups of their own.
+    pub bgl: &'a wgpu::BindGroupLayout,
 }
 
 #[derive(Clone, Copy)]
@@ -213,9 +245,14 @@ impl<'a> Ctx<'a> {
     }
 
     pub fn pipeline(&self, sh: &wgpu::ShaderModule, label: &str, vs: &str, fs: &str, o: Pipe) -> wgpu::RenderPipeline {
+        self.pipeline_with(self.layout, sh, label, vs, fs, o)
+    }
+
+    /// Like `pipeline`, for a scene with extra bind groups after group 0.
+    pub fn pipeline_with(&self, layout: &wgpu::PipelineLayout, sh: &wgpu::ShaderModule, label: &str, vs: &str, fs: &str, o: Pipe) -> wgpu::RenderPipeline {
         self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
-            layout: Some(self.layout),
+            layout: Some(layout),
             vertex: wgpu::VertexState { module: sh, entry_point: Some(vs), compilation_options: Default::default(), buffers: &[] },
             fragment: Some(wgpu::FragmentState {
                 module: sh,
@@ -242,6 +279,7 @@ fn create(id: u32, ctx: &Ctx) -> Box<dyn Scene> {
     match id {
         WATERFALL => Box::new(waterfall::Waterfall::new(ctx)),
         TUNNEL => Box::new(tunnel::Tunnel::new(ctx)),
+        VECTORSCOPE => Box::new(vectorscope::Vectorscope::new(ctx)),
         _ => Box::new(columns::Columns::new(ctx)),
     }
 }
