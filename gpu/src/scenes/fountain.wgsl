@@ -38,7 +38,7 @@ fn jet_colour(p: Particle) -> vec3<f32> {
   let base = palette(p.look.z, p.look.x);
   let hot = mix(vec3<f32>(1.0), base, smoothstep(0.0, 0.12, age));          // born white-hot, cools to its colour
   let fade = smoothstep(0.0, 0.03, age) * clamp(p.life / 0.4, 0.0, 1.0);
-  return hot * (1.2 + 1.6 * p.look.w) * fade;
+  return hot * (0.5 + 0.8 * p.look.z + 1.6 * p.look.w) * fade;   // a steeper rise glows brighter
 }
 
 @vertex fn vs_part(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SpriteOut {

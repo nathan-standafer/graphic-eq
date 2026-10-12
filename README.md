@@ -43,10 +43,15 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
 - **3D columns** - segmented LED cores in glass housings on a glossy floor. Optional **Sparks** (Display
   menu, on by default): each lit column sheds embers from the top of its strip in proportion to its
   level, and a column whose peak cap rises throws a fan of sparks that arc and skitter on the floor.
-- **Fountain** - the 192-bin spectrum is a line of emitters along a glass floor. Each jet's launch speed
-  follows its bin's level, so the sprays rise and fall with the spectrum: bass is broad heavy arcs,
-  treble fine scattered spray. Onsets throw bursts from the point on the line where they sounded, and
-  every particle bounces on the floor and is mirrored in it. A **Particles** density slider scales it.
+- **Fountain** - sparks fly where the volume is rising. Every frequency reports how steeply its level is
+  climbing right now, and a line of emitters along a glass floor throws sparks from the frequencies that
+  are rising fastest: bass on the left, treble on the right. A kick is a steep rise in the lows, so it
+  throws sparks on the left; a snare is a steep rise up high, so it throws them on the right; steady sound
+  throws none. The steeper the rise, the more sparks and the bigger, brighter and higher they fly. Sparks
+  arc, bounce on the floor and are mirrored in it. A rise is judged against the music's own hardest recent
+  hits, so one setting works across recordings and volumes. Display menu: **sensitivity** sets how close
+  to those a rise must get (turn it up for more sparks, down for only the hardest hits) and **density**
+  scales the count.
 - **Waterfall** - the spectrum history as a wireframe terrain (mixed or stereo overlay), inside glass
   walls on all four sides. The front wall carries the live spectrum line; each side wall carries the
   terrain's edge and the back wall the oldest row, so their lines follow where the waterfall meets the
@@ -85,7 +90,8 @@ audio: no EQ engine, no routing changes, settings are read-only.
 
 `GEQ_SHOT` with a synthetic source steps a simulated clock, so captures repeat exactly. Other hooks:
 `GEQ_PRESET`, `GEQ_THEME`, `GEQ_BLOOM`, `GEQ_MOTION`, `GEQ_FLASH`, `GEQ_STEREO`, `GEQ_ORBIT`,
-`GEQ_DENSITY=n` (fountain particle density), `GEQ_SPARKS=0` (columns without sparks),
+`GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor),
+`GEQ_GRADIENT=n` (fountain spark sensitivity), `GEQ_DENSITY=n` (fountain particle density), `GEQ_SPARKS=0` (columns without sparks),
 `GEQ_CYCLE=secs` (auto-cycle scenes), `GEQ_LATENCY=1` (onset delivery delay), `GEQ_BROWSER=1`,
 `GEQ_VIEW=scene|bloom|nan` (composite debug views). `tools/make-thumbs.sh` regenerates the look
 thumbnails from real captures. `cargo test` covers the synthetic source, onset detection, and the

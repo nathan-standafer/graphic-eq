@@ -14,5 +14,6 @@ shot 0 0 0-studio 12;        shot 0 1 0-amber-rack 12;    shot 0 2 0-ice-deck 12
 shot 1 0 1-neon-terrain 12;  shot 1 1 1-classic-mesh 12;  shot 1 2 1-ice-sheet 12
 shot 2 0 2-neon-conduit 12;  shot 2 1 2-ice-core 12;      shot 2 2 2-ember-flue 12;  shot 2 3 2-prism 12
 shot 3 0 3-p31-green 12;     shot 3 1 3-amber-scope 12;   shot 3 2 3-ice-trace 12;   shot 3 3 3-neon-lissajous 12
-shot 4 0 4-ice-geyser 12;    shot 4 1 4-ember-fountain 12; shot 4 2 4-neon-spray 12; shot 4 3 4-spectrum-jets 12
+# the fountain throws sparks where the volume rises: 13.6 s is a kick and a snare landing together
+shot 4 0 4-ice-geyser 13.6;    shot 4 1 4-ember-fountain 13.6; shot 4 2 4-neon-spray 13.6; shot 4 3 4-spectrum-jets 13.6
 cargo build --release

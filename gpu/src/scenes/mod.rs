@@ -107,8 +107,8 @@ pub struct SceneParams {
     pub sparks: bool,
     /// Particle density multiplier (fountain emission, a quality setting).
     pub density: f32,
-    /// Onset events that arrived this frame (band, strength, centroid, 0); unused slots are zero.
-    pub hits: [[f32; 4]; 4],
+    /// How steeply a frequency's volume must rise to throw a spark (the fountain's sensitivity, 1 = designed).
+    pub gradient: f32,
     /// Per column: how far its peak cap rose this frame in a burst-worthy push (0 = no burst).
     pub peak_hits: [f32; 11],
 }
@@ -155,6 +155,8 @@ pub enum Control {
     Sparks,
     /// How many particles the fountain launches.
     Density,
+    /// How steeply the volume must rise to throw sparks.
+    Gradient,
 }
 
 pub struct SceneInfo {
@@ -201,8 +203,8 @@ const INFOS: [SceneInfo; 5] = [
         id: FOUNTAIN,
         name: "Fountain",
         cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
-        controls: &[Control::Density],
-        cost_ms: 2.7,
+        controls: &[Control::Gradient, Control::Density],
+        cost_ms: 0.8,
     },
 ];
 
@@ -265,7 +267,11 @@ impl Pipe {
 impl<'a> Ctx<'a> {
     /// Compile a scene shader with `common.wgsl` in front of it.
     pub fn module(&self, label: &str, src: &str) -> wgpu::ShaderModule {
-        let full = format!("{COMMON_WGSL}\n{src}").replace("const NX: u32 = 96u;", &format!("const NX: u32 = {HIST_W}u;"));
+        let full = format!("{COMMON_WGSL}\n{src}")
+            .replace("const NX: u32 = 96u;", &format!("const NX: u32 = {HIST_W}u;"))
+            .replace("const RISE_FULL: f32 = 1.5;", &format!("const RISE_FULL: f32 = {:.1};", crate::render::RISE_FULL))
+            .replace("const RISE_START: f32 = 0.42;", &format!("const RISE_START: f32 = {:.3};", crate::render::SPARK_START))
+            .replace("const RISE_FULL_SPARK: f32 = 1.0;", &format!("const RISE_FULL_SPARK: f32 = {:.3};", crate::render::SPARK_FULL));
         self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(full.into()) })
     }
 

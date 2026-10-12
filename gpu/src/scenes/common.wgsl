@@ -58,7 +58,8 @@ fn line(v: f32) -> f32 {
   return 1.0 - smoothstep(0.0, 1.3 * w + 1e-4, d);
 }
 
-// ---- spectrum history (ring buffer of rows; row 0 is the newest). R = left, G = right, B = mixed.
+// ---- spectrum history (ring buffer of rows; row 0 is the newest). R = left, G = right, B = mixed, A = how
+// steeply the level is rising at that bin (see `hist_rise`).
 fn hist_row(zi: u32) -> i32 {
   let rows = i32(u.rows);
   return (i32(u.head) - i32(zi) + rows) % rows;
@@ -68,6 +69,10 @@ fn hist_h2(xi: u32, zi: u32) -> vec2<f32> {
 }
 fn hist_m(xi: u32, zi: u32) -> f32 {
   return textureLoad(hist, vec2<i32>(i32(xi), hist_row(zi)), 0).b;
+}
+const RISE_FULL: f32 = 1.5;   // the normalized rise in a full alpha byte; the Rust side keeps this in step
+fn hist_rise(xi: u32, zi: u32) -> f32 {
+  return textureLoad(hist, vec2<i32>(i32(xi), hist_row(zi)), 0).a * RISE_FULL;
 }
 
 fn hash21(p: vec2<f32>) -> f32 {

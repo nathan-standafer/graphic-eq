@@ -56,6 +56,10 @@ pub struct Levels {
     pub curve_r: [f32; CURVE_POINTS],
     /// Onset envelopes (low, mid, high) as of `t`, and stereo correlation (-1..1).
     pub fx: [f32; 4],
+    /// How steeply the level is rising at each waterfall bin right now, in nats per analysis hop (about
+    /// 10 ms) of the log-compressed magnitude, with a fast attack and a ~50 ms fall so a hit stays visible
+    /// for a few frames. A steady tone reads near 0; a hit reads 1-3 across the frequencies it excites.
+    pub rise: [f32; CURVE_POINTS],
     /// App-clock time of the newest sample these levels include.
     pub t: f64,
     pub seq: u64,
@@ -69,6 +73,7 @@ impl Default for Levels {
             curve_l: [FLOOR_DB; CURVE_POINTS],
             curve_r: [FLOOR_DB; CURVE_POINTS],
             fx: [0.0; 4],
+            rise: [0.0; CURVE_POINTS],
             t: 0.0,
             seq: 0,
         }
@@ -89,6 +94,24 @@ pub fn curve_freq(i: usize) -> f32 {
 /// Position of a frequency on the 30 Hz - 20 kHz log axis (0..1).
 fn log_pos(f: f32) -> f32 {
     ((f / 30.0).ln() / (20000.0f32 / 30.0).ln()).clamp(0.0, 1.0)
+}
+
+/// Time constant of the rise envelope's fall, seconds.
+const RISE_TAU: f32 = 0.05;
+
+/// The 1024-point FFT bins each waterfall bin listens to for a rise: its frequency plus or minus a sixth of
+/// an octave. At the low end that is one or two bins (47 Hz apart), which is all the 21 ms window resolves.
+fn rise_bins() -> Vec<(usize, usize)> {
+    let hz = RATE / FLUX_FFT as f32;
+    let w = 2f32.powf(1.0 / 6.0);
+    (0..CURVE_POINTS)
+        .map(|i| {
+            let f = curve_freq(i);
+            let lo = ((f / w / hz).floor() as usize).clamp(1, FLUX_FFT / 2);
+            let hi = ((f * w / hz).ceil() as usize).clamp(lo, FLUX_FFT / 2);
+            (lo, hi)
+        })
+        .collect()
 }
 
 /// Cumulative one-sided power spectrum (mean-square contribution per bin).
@@ -123,6 +146,9 @@ pub struct Dsp {
     cum_r: Vec<f32>,
     small: Vec<Complex<f32>>,
     prev_c: Vec<f32>,
+    /// For each waterfall bin, the span of 1024-point FFT bins it listens to for a rise.
+    rise_bins: Vec<(usize, usize)>,
+    rise: [f32; CURVE_POINTS],
     env: [f32; 3],
     x_prev: [f32; 3],
     peak: [f32; 3],
@@ -166,6 +192,8 @@ impl Dsp {
             cum_r: vec![0.0; FFT_SIZE / 2 + 1],
             small: vec![Complex::new(0.0, 0.0); FLUX_FFT],
             prev_c: vec![0.0; FLUX_FFT / 2 + 1],
+            rise_bins: rise_bins(),
+            rise: [0.0; CURVE_POINTS],
             env: [0.0; 3],
             x_prev: [0.0; 3],
             peak: [0.0; 3],
@@ -233,6 +261,19 @@ impl Dsp {
         let mut c = [0f32; FLUX_FFT / 2 + 1];
         for k in 0..=FLUX_FFT / 2 {
             c[k] = (1.0 + 2000.0 * self.small[k].norm() * scale).ln();
+        }
+        // how steeply each frequency's level is rising: the positive change of the compressed magnitude since
+        // the previous hop, largest over the bins a waterfall bin covers, held with a short fall
+        let keep = (-hop_dt / RISE_TAU).exp();
+        for (i, (lo, hi)) in self.rise_bins.iter().enumerate() {
+            // the mean over the bins, not the largest: a hit lifts all of them together, while the jitter of
+            // noise-like sounds (hats, cymbals) lifts some and drops others, and a maximum would keep the jitter
+            let mut d = 0.0f32;
+            for k in *lo..=*hi {
+                d += (c[k] - self.prev_c[k]).max(0.0);
+            }
+            d /= (*hi - *lo + 1) as f32;
+            self.rise[i] = if warm { (self.rise[i] * keep).max(d) } else { 0.0 };
         }
         for r in 0..3 {
             let (lo, hi) = FLUX_REGIONS[r];
@@ -318,6 +359,7 @@ impl Dsp {
         lv.seq = self.seq;
         lv.t = t;
         lv.fx = [self.env[0], self.env[1], self.env[2], self.corr];
+        lv.rise = self.rise;
         lv
     }
 }
@@ -513,6 +555,249 @@ mod tests {
         let got = sh.take_wave();
         assert_eq!(got.len(), WAVE_CAP);
         assert_eq!(got.last().unwrap()[0], (n - 1) as f32);
+    }
+
+    /// Run `secs` of a signal made by `signal(sample_index)` through the DSP and return the last `Levels`.
+    fn rise_after(secs: f32, signal: impl Fn(usize) -> f32) -> Levels {
+        let mut dsp = Dsp::new();
+        let mut last = Levels::default();
+        let total = (secs * RATE) as usize;
+        let mut i = 0;
+        while i < total {
+            let n = 480.min(total - i);
+            let l: Vec<f32> = (i..i + n).map(&signal).collect();
+            let (lv, _) = dsp.push(&l, &l, (i + n) as f64 / RATE as f64);
+            if let Some(lv) = lv {
+                last = lv;
+            }
+            i += n;
+        }
+        last
+    }
+
+    #[test]
+    fn a_steady_tone_does_not_rise_but_its_start_does_at_its_own_frequency() {
+        // with a noise floor like a real recording's: onsets from exact digital silence splatter everywhere
+        let floor = |i: usize| ((((i as u32).wrapping_mul(2654435761)) >> 16) as f32 / 65535.0 - 0.5) * 6e-4;
+        let tone = |f: f32| move |i: usize| 0.3 * (std::f32::consts::TAU * f * i as f32 / RATE).sin() + floor(i);
+        // 2 s into a steady 100 Hz tone: nothing is rising
+        let steady = rise_after(2.0, tone(100.0));
+        assert!(steady.rise.iter().all(|r| *r < 0.15), "steady max {}", steady.rise.iter().cloned().fold(0.0, f32::max));
+        // a 100 Hz tone that starts at 1.0 s: just after the start, the rise is at 100 Hz and not at 5 kHz
+        let t = |i: usize| if i as f32 / RATE >= 1.0 { tone(100.0)(i) } else { floor(i) };
+        let start = rise_after(1.02, t);
+        let at = |f: f32| (0..CURVE_POINTS).min_by(|a, b| (curve_freq(*a) - f).abs().partial_cmp(&(curve_freq(*b) - f).abs()).unwrap()).unwrap();
+        assert!(start.rise[at(100.0)] > 1.0, "rise at 100 Hz {}", start.rise[at(100.0)]);
+        assert!(start.rise[at(5000.0)] < 0.3, "rise at 5 kHz {}", start.rise[at(5000.0)]);
+        // and a 5 kHz tone starting later rises up there instead
+        let t = |i: usize| if i as f32 / RATE >= 1.0 { tone(5000.0)(i) } else { floor(i) };
+        let hi = rise_after(1.02, t);
+        // an abrupt start has some broadband click in it, but the tone's own frequency rises far more
+        assert!(hi.rise[at(5000.0)] > 1.0, "rise at 5 kHz {}", hi.rise[at(5000.0)]);
+        assert!(hi.rise[at(5000.0)] > 2.0 * hi.rise[at(100.0)], "rise at 5 kHz {} vs 100 Hz {}", hi.rise[at(5000.0)], hi.rise[at(100.0)]);
+    }
+
+    #[test]
+    fn the_rise_dies_away_after_a_hit() {
+        let floor = |i: usize| ((((i as u32).wrapping_mul(2654435761)) >> 16) as f32 / 65535.0 - 0.5) * 6e-4;
+        let t = move |i: usize| floor(i) + if i as f32 / RATE >= 1.0 { 0.3 * (std::f32::consts::TAU * 100.0 * i as f32 / RATE).sin() } else { 0.0 };
+        let hit = rise_after(1.01, t);
+        let later = rise_after(1.5, t);
+        let peak = |l: &Levels| l.rise.iter().cloned().fold(0.0, f32::max);
+        assert!(peak(&hit) > 1.0 && peak(&later) < 0.2, "{} then {}", peak(&hit), peak(&later));
+    }
+
+    /// The rise per frequency region at the percussion fixture's kicks (t = 0 mod 3) and snares (1.5 mod 3), and
+    /// its typical level over the demo song: for setting how the rise turns into sparks.
+    #[test]
+    #[ignore]
+    fn dump_rise() {
+        let regions = [(30.0, 150.0), (150.0, 500.0), (500.0, 2000.0), (2000.0, 6000.0), (6000.0, 20000.0)];
+        let region_max = |lv: &Levels, r: (f32, f32)| (0..CURVE_POINTS).filter(|i| curve_freq(*i) >= r.0 && curve_freq(*i) < r.1).map(|i| lv.rise[i]).fold(0.0, f32::max);
+        for (fx, secs) in [(Fixture::Percussion, 13.0), (Fixture::Demo, 40.0)] {
+            let mut synth = Synth::new(fx);
+            let mut dsp = Dsp::new();
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            let mut rows: Vec<(f64, [f32; 5])> = Vec::new();
+            for k in 0..(secs * 100.0) as usize {
+                l.clear();
+                r.clear();
+                synth.render(480, &mut l, &mut r);
+                if let (Some(lv), _) = dsp.push(&l, &r, (k + 1) as f64 * 0.01) {
+                    rows.push(((k + 1) as f64 * 0.01, std::array::from_fn(|i| region_max(&lv, regions[i]))));
+                }
+            }
+            if fx == Fixture::Percussion {
+                for (name, phase) in [("kick", 0.0), ("snare", 1.5)] {
+                    let mut peak = [0.0f32; 5];
+                    for (t, v) in &rows {
+                        let m = (t - phase).rem_euclid(3.0);
+                        if *t > 3.0 && m < 0.08 {
+                            for i in 0..5 {
+                                peak[i] = peak[i].max(v[i]);
+                            }
+                        }
+                    }
+                    eprintln!("{name:6} peak rise by region (30-150, 150-500, 500-2k, 2k-6k, 6k-20k Hz): {:.2?}", peak);
+                }
+                // the quiet moments between: typical max
+                let mut quiet: Vec<f32> = rows.iter().filter(|(t, _)| *t > 3.0 && (t % 3.0 > 0.4 && t % 3.0 < 1.4)).map(|(_, v)| v.iter().cloned().fold(0.0, f32::max)).collect();
+                quiet.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                eprintln!("between hits: median max-rise {:.2}, p95 {:.2}", quiet[quiet.len() / 2], quiet[quiet.len() * 95 / 100]);
+            } else {
+                for i in 0..5 {
+                    let mut v: Vec<f32> = rows.iter().filter(|(t, _)| *t > 3.0).map(|(_, r)| r[i]).collect();
+                    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    let n = v.len();
+                    eprintln!("demo region {i}: median {:.2} p75 {:.2} p90 {:.2} p99 {:.2}", v[n / 2], v[n * 75 / 100], v[n * 90 / 100], v[n * 99 / 100]);
+                }
+            }
+        }
+    }
+
+    /// Percentiles of the rise over every waterfall bin and frame of a song (the background a threshold must clear).
+    #[test]
+    #[ignore]
+    fn dump_rise_distribution() {
+        for fx in [Fixture::Percussion, Fixture::Demo, Fixture::Dense] {
+            let mut synth = Synth::new(fx);
+            let mut dsp = Dsp::new();
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            let mut all: Vec<f32> = Vec::new();
+            for k in 0..(32 * 100) {
+                l.clear();
+                r.clear();
+                synth.render(480, &mut l, &mut r);
+                if let (Some(lv), _) = dsp.push(&l, &r, (k + 1) as f64 * 0.01) {
+                    if k > 300 {
+                        all.extend(lv.rise.iter());
+                    }
+                }
+            }
+            all.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let n = all.len();
+            eprintln!("{:?}: per-bin rise median {:.2} p75 {:.2} p90 {:.2} p95 {:.2} p99 {:.2} p99.9 {:.2}", fx, all[n / 2], all[n * 75 / 100], all[n * 90 / 100], all[n * 95 / 100], all[n * 99 / 100], all[n * 999 / 1000]);
+        }
+    }
+
+    /// What the fountain would do with a stream of per-frame rises (about 120 a second): through `RiseNorm`, the
+    /// share of frames in which any frequency is above the spark threshold at sensitivity 1 and at 2, the
+    /// typical number of frequencies above it when sparks fly, and the share of frames with a full-strength
+    /// spark. Returns one line.
+    fn spark_coverage(frames: &[[f32; CURVE_POINTS]]) -> String {
+        let mut norm = crate::modulation::RiseNorm::new();
+        let (mut any1, mut any2, mut full, mut bins1) = (0usize, 0usize, 0usize, 0usize);
+        let mut after = 0usize;
+        for (k, f) in frames.iter().enumerate() {
+            let n = norm.update(f, 1.0 / 120.0);
+            if k < 8 * 120 {
+                continue; // let the reference settle
+            }
+            after += 1;
+            let above = |t: f32| n.iter().filter(|v| **v >= t).count();
+            let c1 = above(crate::modulation::SPARK_START);
+            if c1 > 0 {
+                any1 += 1;
+                bins1 += c1;
+            }
+            if above(crate::modulation::SPARK_START / 2.0) > 0 {
+                any2 += 1;
+            }
+            if n.iter().any(|v| *v >= crate::modulation::SPARK_FULL) {
+                full += 1;
+            }
+        }
+        let pct = |x: usize| 100.0 * x as f32 / after.max(1) as f32;
+        format!(
+            "sparks in {:4.1}% of frames at sensitivity 1 ({:.0} bins when they fly), {:4.1}% at 2, full strength in {:4.1}%",
+            pct(any1), bins1 as f32 / any1.max(1) as f32, pct(any2), pct(full)
+        )
+    }
+
+    /// The same, on the synthetic songs at several volumes.
+    #[test]
+    #[ignore]
+    fn dump_spark_coverage() {
+        for (fx, secs) in [(Fixture::Percussion, 40.0), (Fixture::Demo, 64.0), (Fixture::Dense, 32.0)] {
+            for gain in [1.0f32, 0.5, 0.25, 0.1] {
+                let mut synth = Synth::new(fx);
+                let mut dsp = Dsp::new();
+                let (mut l, mut r) = (Vec::new(), Vec::new());
+                let mut frames = Vec::new();
+                for k in 0..(secs * 120.0) as usize {
+                    l.clear();
+                    r.clear();
+                    synth.render(400, &mut l, &mut r);
+                    for v in l.iter_mut().chain(r.iter_mut()) {
+                        *v *= gain;
+                    }
+                    if let (Some(lv), _) = dsp.push(&l, &r, (k + 1) as f64 / 120.0) {
+                        frames.push(lv.rise);
+                    } else if let Some(last) = frames.last().copied() {
+                        frames.push(last);
+                    }
+                }
+                eprintln!("{:10?} x{gain:<4}: {}", fx, spark_coverage(&frames));
+            }
+        }
+    }
+
+    /// Statistics of the rise on whatever is playing now, from the default output's monitor (read-only, no
+    /// routing changes; only numbers are printed, no audio is kept). Run with something playing:
+    /// `cargo test --release live_rise_stats -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_rise_stats() {
+        let a = Analyzer::start("@DEFAULT_MONITOR@").expect("parec");
+        let mut seen = 0u64;
+        let mut per_frame_max: Vec<f32> = Vec::new();
+        let mut all: Vec<f32> = Vec::new();
+        let mut bands_peak = -200.0f32;
+        let mut region: [Vec<f32>; 5] = Default::default();
+        let mut frames: Vec<[f32; CURVE_POINTS]> = Vec::new();
+        let regions = [(30.0, 150.0), (150.0, 500.0), (500.0, 2000.0), (2000.0, 6000.0), (6000.0, 20000.0)];
+        let t0 = std::time::Instant::now();
+        while t0.elapsed().as_secs_f32() < 30.0 {
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            let lv = a.shared.levels.lock().unwrap().clone();
+            if lv.seq == seen || t0.elapsed().as_secs_f32() < 1.0 {
+                continue;
+            }
+            seen = lv.seq;
+            bands_peak = bands_peak.max(lv.bands.iter().cloned().fold(-200.0, f32::max));
+            per_frame_max.push(lv.rise.iter().cloned().fold(0.0, f32::max));
+            all.extend(lv.rise.iter());
+            frames.push(lv.rise);
+            for (k, r) in regions.iter().enumerate() {
+                region[k].push((0..CURVE_POINTS).filter(|i| curve_freq(*i) >= r.0 && curve_freq(*i) < r.1).map(|i| lv.rise[i]).fold(0.0, f32::max));
+            }
+        }
+        eprintln!("{}", spark_coverage(&frames));
+        // the old rule at sensitivity 3.0 (absolute: a tilted rise above 2.6/3 starts sparks, full at 6.5/3)
+        let (mut any, mut full, mut bins) = (0usize, 0usize, 0usize);
+        for f in frames.iter().skip(8 * 120) {
+            let t: Vec<f32> = f.iter().enumerate().map(|(i, r)| r * crate::modulation::rise_tilt(i, CURVE_POINTS)).collect();
+            let c = t.iter().filter(|v| **v > 2.6 / 3.0).count();
+            if c > 0 {
+                any += 1;
+                bins += c;
+            }
+            if t.iter().any(|v| *v > 6.5 / 3.0) {
+                full += 1;
+            }
+        }
+        let n = frames.len().saturating_sub(8 * 120).max(1) as f32;
+        eprintln!("old rule at sensitivity 3.0: sparks in {:4.1}% of frames ({:.0} bins when they fly), full strength in {:4.1}%", 100.0 * any as f32 / n, bins as f32 / any.max(1) as f32, 100.0 * full as f32 / n);
+        let pct = |v: &mut Vec<f32>, p: f32| {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            if v.is_empty() { 0.0 } else { v[((v.len() - 1) as f32 * p) as usize] }
+        };
+        eprintln!("frames {}, loudest band {:.1} dB", per_frame_max.len(), bands_peak);
+        eprintln!("per-bin rise:      median {:.2} p75 {:.2} p90 {:.2} p95 {:.2} p99 {:.2} p99.9 {:.2}", pct(&mut all, 0.5), pct(&mut all, 0.75), pct(&mut all, 0.9), pct(&mut all, 0.95), pct(&mut all, 0.99), pct(&mut all, 0.999));
+        eprintln!("per-frame max bin: median {:.2} p75 {:.2} p90 {:.2} p95 {:.2} p99 {:.2} max {:.2}", pct(&mut per_frame_max, 0.5), pct(&mut per_frame_max, 0.75), pct(&mut per_frame_max, 0.9), pct(&mut per_frame_max, 0.95), pct(&mut per_frame_max, 0.99), pct(&mut per_frame_max, 1.0));
+        for (k, r) in regions.iter().enumerate() {
+            eprintln!("region {:5.0}-{:5.0} Hz: max-bin rise median {:.2} p90 {:.2} p99 {:.2} max {:.2}", r.0, r.1, pct(&mut region[k], 0.5), pct(&mut region[k], 0.9), pct(&mut region[k], 0.99), pct(&mut region[k], 1.0));
+        }
     }
 
     #[test]

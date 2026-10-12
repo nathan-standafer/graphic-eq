@@ -18,10 +18,6 @@ const RING_LIFE: f64 = 3.2;
 /// Minimum onset strength that launches a ring, per band (low, mid, high; high never does).
 const RING_MIN: [f32; 3] = [0.45, 1.0, f32::INFINITY];
 const RING_SPACING: [f64; 3] = [0.10, 0.12, 1.0];
-/// Discrete hits per frame, and per band the weakest hit worth reporting and the shortest gap between hits.
-pub const HIT_CAP: usize = 4;
-const HIT_MIN: [f32; 3] = [0.30, 0.50, 0.40];
-const HIT_GAP: [f64; 3] = [0.07, 0.07, 0.05];
 
 struct Ring {
     t0: f64,
@@ -38,9 +34,6 @@ pub struct Signals {
     pub sus: [f32; 4],
     pub gate: f32,
     pub rings: [[f32; 4]; RING_CAP],
-    /// Onsets that arrived this frame as (band, strength, centroid, 0), for scenes that throw a burst of
-    /// particles per hit. Weak ones and ones too close after the previous hit of their band are dropped.
-    pub hits: [[f32; 4]; HIT_CAP],
 }
 
 pub struct Modulation {
@@ -51,7 +44,55 @@ pub struct Modulation {
     open: bool,
     rings: Vec<Ring>,
     last_ring: [f64; 3],
-    last_hit: [f64; 3],
+}
+
+/// Makes the rise (see `analyzer::Levels::rise`) comparable between recordings. How steeply a recording's
+/// volume rises at a hit depends on how sharp its drums are and how loud it is: the synthetic songs reach
+/// 6-7 nats, a real recording was measured peaking near 3. So the rise is divided by a slowly decaying
+/// peak of its own recent maximum, and what the fountain's threshold sees is "how close to the hardest
+/// recent hit". The reference never falls below `REF_MIN`, so a stretch of steady music (whose rise is only
+/// jitter) is not scaled up until the jitter looks like hits.
+pub struct RiseNorm {
+    reference: f32,
+}
+
+/// The normalized rise (1 = the hardest recent hit) at which a frequency starts to throw sparks, and at which
+/// it throws its strongest, at sensitivity 1. Calibrated on a real recording, whose hardest hits rise about
+/// 3.3 nats: the setting the owner found worked well on it was an absolute 0.87 to 2.2 nats, which is
+/// 0.26 to 0.66 of that, trimmed a little (it matched that setting within 10% on the same audio). (The fountain's shader reads these through `render::SPARK_START` and `SPARK_FULL`.)
+pub const SPARK_START: f32 = 0.28;
+pub const SPARK_FULL: f32 = 0.72;
+/// The reference is kept between these (nats), and falls with this time constant (seconds).
+const REF_MIN: f32 = 3.0;
+const REF_MAX: f32 = 7.0;
+const REF_TAU_S: f32 = 8.0;
+
+/// Higher frequencies rise less than the lows at a hit (a snare's rise up high is about half a kick's in the
+/// lows, measured on both the synthetic songs and a real recording), so they are weighted up to keep both
+/// sides of the fountain's line equally easy to light.
+pub fn rise_tilt(bin: usize, bins: usize) -> f32 {
+    0.85 + (1.8 - 0.85) * bin as f32 / (bins - 1) as f32
+}
+
+impl RiseNorm {
+    pub fn new() -> RiseNorm {
+        RiseNorm { reference: REF_MIN }
+    }
+
+    /// The tilted rise of every bin divided by the reference: about 1 at the hardest recent hit.
+    pub fn update<const N: usize>(&mut self, rise: &[f32; N], dt: f32) -> [f32; N] {
+        let mut out = [0.0f32; N];
+        let mut peak = 0.0f32;
+        for (i, r) in rise.iter().enumerate() {
+            out[i] = r * rise_tilt(i, N);
+            peak = peak.max(out[i]);
+        }
+        self.reference = (self.reference * (-dt / REF_TAU_S).exp()).max(peak).clamp(REF_MIN, REF_MAX);
+        for v in out.iter_mut() {
+            *v /= self.reference;
+        }
+        out
+    }
 }
 
 /// A peak cap pushes higher on every frame its level sits at the peak, so rises are summed, and a burst
@@ -101,7 +142,7 @@ fn smooth(cur: &mut f32, target: f32, dt: f32, tau_up: f32, tau_down: f32) {
 
 impl Modulation {
     pub fn new() -> Modulation {
-        Modulation { reference: [0.25; 3], sus: [0.0; 3], trend: 0.0, gate: 0.0, open: false, rings: Vec::new(), last_ring: [f64::NEG_INFINITY; 3], last_hit: [f64::NEG_INFINITY; 3] }
+        Modulation { reference: [0.25; 3], sus: [0.0; 3], trend: 0.0, gate: 0.0, open: false, rings: Vec::new(), last_ring: [f64::NEG_INFINITY; 3] }
     }
 
     /// `frac` are the displayed band levels (0..1) after range and sensitivity.
@@ -155,18 +196,7 @@ impl Modulation {
             *slot = [(now - r.t0).max(0.0) as f32, r.strength, r.band as f32, r.centroid];
         }
 
-        // ---- hits: the same events, as discrete accents for particle bursts
-        let mut hits = [[0.0f32; 4]; HIT_CAP];
-        let mut n = 0;
-        for e in fresh {
-            let b = (e.band as usize).min(2);
-            if self.gate > 0.5 && n < HIT_CAP && e.strength >= HIT_MIN[b] && e.t - self.last_hit[b] >= HIT_GAP[b] {
-                self.last_hit[b] = e.t;
-                hits[n] = [b as f32, e.strength, e.centroid, 0.0];
-                n += 1;
-            }
-        }
-        Signals { fx, sus: [self.sus[0], self.sus[1], self.sus[2], self.trend], gate: self.gate, rings, hits }
+        Signals { fx, sus: [self.sus[0], self.sus[1], self.sus[2], self.trend], gate: self.gate, rings }
     }
 }
 
@@ -266,27 +296,47 @@ mod tests {
     }
 
     #[test]
-    fn hits_are_discrete_and_rate_limited() {
-        let mut m = Modulation::new();
-        let frac = [0.5f32; 11];
-        for i in 0..120 {
-            m.update(i as f64 / 60.0, 1.0 / 60.0, &lv(0.0, 0.0), &[], &frac);
+    fn the_rise_is_judged_against_the_music_s_own_hits() {
+        let dt = 1.0 / 120.0;
+        // a hit stream and the same stream at half the strength: after a few seconds both reach the same
+        // normalized height, which is what makes one sensitivity setting work for both
+        let run = |scale: f32| {
+            let mut n = RiseNorm::new();
+            let mut top = 0.0f32;
+            for k in 0..(10 * 120) {
+                let mut rise = [0.0f32; 192];
+                if k % 60 < 5 {
+                    rise[10] = 6.0 * scale; // a kick every half second
+                }
+                let out = n.update(&rise, dt);
+                if k > 8 * 120 {
+                    top = top.max(out[10]);
+                }
+            }
+            top
+        };
+        let (loud, soft) = (run(1.0), run(0.55));
+        assert!(loud > 0.6, "loud {loud}");
+        // below the floor the reference stops following: a soft recording is lifted but not all the way
+        assert!(soft > 0.45 * loud / 1.0 && soft < loud, "soft {soft} vs loud {loud}");
+        // the jitter of steady music (rise ~1) does not look like hits: the floor keeps it well below 1
+        let mut n = RiseNorm::new();
+        let mut worst = 0.0f32;
+        for k in 0..(20 * 120) {
+            let rise = [0.8 + 0.4 * ((k % 7) as f32 / 7.0); 192];
+            for v in n.update(&rise, dt) {
+                worst = worst.max(v);
+            }
         }
-        let kick = Onset { band: 0, strength: 0.9, centroid: 0.15, t: 2.0 };
-        let s = m.update(2.01, 1.0 / 60.0, &lv(1.0, 2.0), &[kick], &frac);
-        assert_eq!(s.hits[0], [0.0, 0.9, 0.15, 0.0]);
-        assert_eq!(s.hits[1][1], 0.0, "one hit reported once");
-        // the next frame carries no event, so no hit; a second low onset right after the first is dropped
-        let s = m.update(2.02, 1.0 / 60.0, &lv(1.0, 2.0), &[], &frac);
-        assert_eq!(s.hits[0][1], 0.0);
-        let again = Onset { band: 0, strength: 0.9, centroid: 0.15, t: 2.03 };
-        let s = m.update(2.04, 1.0 / 60.0, &lv(1.0, 2.03), &[again], &frac);
-        assert_eq!(s.hits[0][1], 0.0, "too soon after the last one");
-        // a weak onset is below the threshold, a mid onset is its own band
-        let weak = Onset { band: 1, strength: 0.2, centroid: 0.5, t: 3.0 };
-        let mid = Onset { band: 1, strength: 0.8, centroid: 0.5, t: 3.0 };
-        assert_eq!(m.update(3.01, 1.0 / 60.0, &lv(0.0, 3.0), &[weak], &frac).hits[0][1], 0.0);
-        assert_eq!(m.update(3.02, 1.0 / 60.0, &lv(0.0, 3.0), &[mid], &frac).hits[0][..2], [1.0, 0.8]);
+        assert!(worst < 0.7, "steady jitter reads {worst}");
+        // after a very loud passage the reference decays instead of staying high for ever, down to its floor
+        let mut n = RiseNorm::new();
+        n.update(&[4.0f32; 192], dt);
+        assert!(n.reference > 6.0);
+        for _ in 0..(40 * 120) {
+            n.update(&[0.2f32; 192], dt);
+        }
+        assert!((n.reference - REF_MIN).abs() < 0.05, "reference stuck at {}", n.reference);
     }
 
     #[test]

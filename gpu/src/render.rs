@@ -11,6 +11,10 @@ use std::sync::Arc;
 
 pub const HIST_W: u32 = crate::analyzer::CURVE_POINTS as u32;
 pub const HIST_H: u32 = 256;
+/// The normalized rise (see `modulation::RiseNorm`; 1 is the hardest recent hit) that fills the history
+/// row's alpha byte.
+pub const RISE_FULL: f32 = 1.5;
+pub use crate::modulation::{SPARK_FULL, SPARK_START};
 pub const SCENE_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEPTH_FMT: wgpu::TextureFormat = scenes::DEPTH_FMT;
 const MSAA: u32 = scenes::MSAA;
@@ -52,7 +56,7 @@ pub struct SceneCallback {
     pub post: PostLook,
     pub time: f32,
     pub size_px: [u32; 2],
-    /// New history rows: HIST_W texels of (left, right, mixed, unused) bytes (Rgba8).
+    /// New history rows: HIST_W texels of (left, right, mixed, rise) bytes (Rgba8).
     pub rows: Vec<Vec<u8>>,
     /// Stereo samples since the previous frame, oldest first.
     pub wave: Vec<[f32; 2]>,

@@ -42,6 +42,7 @@ pub struct Settings {
     pub persistence: f32, // vectorscope phosphor afterglow, seconds
     pub sparks: bool,     // columns: embers and sparks over the columns
     pub density: f32,     // fountain particle density (1 = the designed amount)
+    pub spark_sensitivity: f32, // fountain: how close to the music's hardest hits a rise must get to throw sparks (1 = designed)
     pub favorites: Vec<String>,
     pub variants: BTreeMap<String, Variant>,
     pub crossfade: bool,
@@ -84,6 +85,7 @@ impl Default for Settings {
             persistence: 0.25,
             sparks: true,
             density: 1.0,
+            spark_sensitivity: 1.0,
             favorites: Vec::new(),
             variants: BTreeMap::new(),
             crossfade: true,
@@ -148,6 +150,9 @@ mod tests {
         assert!((s.bloom - 1.2).abs() < 1e-6);
         assert!((s.persistence - 0.25).abs() < 1e-6, "new fields take their defaults");
         assert!(s.sparks && (s.density - 1.0).abs() < 1e-6);
+        // the fountain's sensitivity changed meaning (relative to the music's own hits), so the old key is not read
+        let s: Settings = serde_json::from_str(r#"{"gradient": 3.0}"#).unwrap();
+        assert!((s.spark_sensitivity - 1.0).abs() < 1e-6);
         let s: Settings = serde_json::from_str(r#"{"look": [0, 1, 2, 3]}"#).unwrap();
         assert_eq!(s.look, [0, 1, 2, 3, 0]);
         let s: Settings = serde_json::from_str(r#"{"look": [0, 1, 2, 3, 4], "sparks": false}"#).unwrap();

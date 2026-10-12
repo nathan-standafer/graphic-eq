@@ -27,12 +27,17 @@ fn sprite_dead() -> SpriteOut {
 // One corner of a particle's quad. `size` is the world radius; `mirror` reflects the particle in the
 // floor (y = 0) for the glass reflection.
 fn sprite_make(pos: vec3<f32>, vel: vec3<f32>, size: f32, vi: u32, col: vec3<f32>, mirror: bool) -> SpriteOut {
+  // The streak trails behind the particle. One that has just bounced is moving up, so its tail would dip
+  // below the glass: end the streak at the floor instead, so a spark leaves the surface rather than
+  // appearing to pass through it. (Worked out on the real particle, so its reflection follows suit.)
+  var trail = TRAIL_S;
+  if (vel.y > 1.0e-3) { trail = min(trail, max(pos.y, 0.0) / vel.y); }
   var wp = pos;
   var wv = vel;
   if (mirror) { wp.y = -wp.y; wv.y = -wv.y; }
   let c = u.vp * vec4<f32>(wp, 1.0);
   if (c.w < 0.2) { return sprite_dead(); }
-  var ct = u.vp * vec4<f32>(wp - wv * TRAIL_S, 1.0);
+  var ct = u.vp * vec4<f32>(wp - wv * trail, 1.0);
   if (ct.w < 0.2) { ct = c; }
   let half = u.res.xy * 0.5;
   let a = c.xy / c.w * half;

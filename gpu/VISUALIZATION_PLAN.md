@@ -702,13 +702,14 @@ F4, compute particles, and the two things the plan hangs on it.
   screen-space velocity, so fast ones read as motion at 120 Hz), additive. A scene that is skipped for
   twenty frames starts again from an empty sky. The shared uniform group became visible to compute, and
   `Frame` gained a compute timestamp slot.
-- Fountain (scene 4): 262,144 particles. The newest spectrum row is the emitter line: a spawn picks an
-  emitter by rejection sampling (accept with probability level squared, eight tries, so the jets thin out
-  with the signal) and launches up at a speed set by the level, so apex height follows the bin. Bass is
-  large and heavy, treble small and scattered. Gravity, a gentle divergence-free wind (the curl of sines),
-  a floor bounce with a splash flash, and a settle rule. Onsets throw bursts of a size set by band
-  (`modulation::Signals::hits`: events above a per-band strength, rate limited). It is a non-MSAA scene
-  with analytic grid lines, mirrored in the floor by a second draw. Four looks; a density slider.
+- Fountain (scene 4): 262,144 particles of capacity, thrown where the volume is rising (see Milestone 3b for
+  how it got there). The analyzer reports, for each of the 192 bins, how steeply its level is climbing;
+  the rise rides in the history texture's spare alpha channel, and a spawn picks a frequency by rejection
+  sampling on it (sixteen tries, above an adjustable threshold) and launches from that frequency's place on
+  the emitter line. The steeper the rise, the bigger, brighter and faster the spark. Gravity, a gentle
+  divergence-free wind (the curl of sines), a floor bounce with a splash flash, and a settle rule. Non-MSAA
+  with analytic grid lines, mirrored in the floor by a second draw. Four looks; a sensitivity slider (the
+  threshold) and a density slider.
 - Sparks (an overlay on the columns): 16,384 particles on the same machinery, drawn inside the columns'
   multisampled pass so their depth hides what is behind them. Embers shed from the top of each lit strip
   (a column is chosen by running weights the CPU sends), sparks burst from a peak cap when it rises
@@ -719,24 +720,101 @@ F4, compute particles, and the two things the plan hangs on it.
 
 | Scene | fps | frame median / p99 | Scene GPU | Compute |
 |-------|-----|--------------------|-----------|---------|
-| Fountain, density 1.0 | 120.0 | 8.33 / 9.0 ms | 2.5 ms | 0.01-0.02 ms |
-| Fountain, density 1.5 | 120.0 | 8.33 / 9.1 ms | 3.7 ms | 0.02 ms |
+| Fountain, sensitivity 1.0 | 120.0 | 8.33 / 9.1 ms | 0.3 ms | 0.01-0.02 ms |
+| Fountain, sensitivity 1.8 | 120.0 | 8.33 / 8.9 ms | 0.8 ms | 0.02 ms |
 | 3D columns with Sparks (without) | 120.0 | 8.33 / 10 ms | 2.2 ms (2.1) | 0.01 ms |
 
-(The demo signal's quiet intro makes the fountain look cheap, about 1.1 ms; the table is the dense fixture,
-which is its worst case.)
+(The fountain figures are for the rise-driven version. The first, spectrum-driven version cost up to 2.5 ms
+because thousands of jets were alive at once; sparks only fly when something is rising now, so far fewer are.)
 
 **Findings worth keeping**
 
 - Particle density, not particle count, is the design variable. The first version emitted 52,000 a second
   and was a white cloud at every setting; what reads as a fountain is a few thousand alive at a time, with
-  streaks long enough to show the arcs. The continuous rate (2,600 a second at full energy) and burst sizes
-  (450 / 150 / 250) are small by design, and "capacity" in the plan is just headroom for the density slider.
-- Bursts, not the stream, set the density. The synthetic demo fires about 11 onsets a second at strengths
-  near the 2.0 cap; burst counts that looked modest per hit were three times the continuous stream per
-  second. Always budget bursts per second.
+  streaks long enough to show the arcs. "Capacity" in the plan is just headroom for the density slider.
 - The cost is fragment fill, not the simulation. The compute pass is 0.02 ms for 262k particles; trimming
   the streak quads' margins from 5 sigma to 4 sigma cut the fountain's loudest cost by a third (3.15 to
   2.05 ms). An early measurement on the demo's quiet intro said 1.1 ms; the hint needs the loudest second.
 - Two looks of one scene crossfading draw its particles twice but simulate once, so the pair costs two
-  draws; the compositor's frozen-outgoing fallback now covers fountain-to-fountain and fountain-to-columns.
+  draws, and the compositor budgets for that.
+
+## Milestone 3b: from spectrum driven to beat driven (the Fountain)
+
+The first Fountain launched jets by *level* (frequency driven). The request was to make it beat driven:
+bass drums toward the left, snares toward the right, sparks flying on a hit and bigger the more pronounced
+the hit. Two routes were tried.
+
+**Drum classification (tried, discarded).** Classify the analyzer's onset events into kicks, snares and
+hats, and throw a burst per drum from a pad on the left or right. Measured against an exact ground truth
+for the synthetic songs it was precise (no false kicks or snares at any level) but missed half the kicks
+and a third of the snares in a dense mix, and the three coarse frequency regions cannot tell a snare from a
+kick that coincides with a hat (both fire all three). It also needed thresholds that follow the signal level
+(a threshold relative to the strongest recent hit fails when a song has no snares for a while), and it never
+looked right. It was reverted.
+
+**Rate of rise per frequency (shipped).** The idea that replaced it: measure how steeply the volume at each
+frequency is rising, and throw sparks from the frequencies that are rising fast, above a threshold the user
+can move. There is nothing to classify. The position along the line is already the frequency, so a kick (a
+steep rise in the lows) lands on the left and a snare (a rise up high) on the right on their own.
+
+- `analyzer::Levels::rise`: for each of the 192 waterfall bins, the mean positive change of the
+  log-compressed 1024-point magnitude since the previous hop, with a fast attack and a 50 ms fall so a hit
+  survives to the next 60 Hz history row. It travels in the history texture's spare alpha byte.
+- Measured on the percussion fixture, whose hit times are exact: a kick rises 6.6 nats in the lows, 3.6 at
+  500 Hz-2 kHz, 1.1 at 2-6 kHz and 0.2 above; a snare 5.4, 3.4, 3.4 and 3.3. Steady tones read below 0.15.
+- The mean over a bin's FFT bins, not the maximum: a hit lifts all of them together while the jitter of
+  noise-like sounds (hats, cymbals) lifts some and drops others, and a maximum kept the jitter. Switching
+  to the mean cut the dense demo's background (median 0.71 to 0.30 nats, p90 1.9 to 1.1) and left the hits.
+- A fixed tilt weights the higher frequencies up (0.85 to 1.8): a snare's rise up high is half a kick's in
+  the lows, and without the tilt the right side was nearly dark.
+- The threshold is the adjustable gradient: sensitivity 0.6, 1.0 and 1.8 on the same moment of the same song
+  go from nearly nothing, to a clear kick burst on the left and a snare burst on the right, to a full
+  firework. (Its units changed once real music was tried; see below.)
+
+**Findings worth keeping**
+
+- A pure tone starting from digital silence splatters across the whole spectrum, and the log compression
+  magnifies any energy above zero; a test needs the noise floor of a real recording.
+- The rise is measured in nats of a log-compressed magnitude, so it also falls as the signal gets quieter;
+  the sensitivity slider is the remedy for a low system volume.
+- A snare is broadband, so it also lights the lows; the kick-left, snare-right split is a matter of which
+  side *only* one of them reaches (the right side is snares and hats; the left is kicks and snare bodies).
+- Nothing here has been heard on real music, which this machine does not have; only the synthetic songs.
+
+**Real music, and normalizing the rise.** The first version used an absolute threshold (2.6 nats, tuned on the
+synthetic songs), and the owner had to turn the sensitivity slider to its maximum (3.0) on real music to get
+it to work. The live-capture test (`cargo test --release live_rise_stats -- --ignored --nocapture`, a
+read-only tap on the default output that prints only statistics) showed why: a real recording's hardest hits
+rise about 3.3 nats against the synthetic kick's 6.6, so the default sat above nearly everything real. A
+different absolute default would fit one song, so the rise is now judged against the music's own recent
+hits:
+
+- `modulation::RiseNorm` divides each (tilted) rise by a reference: the peak of its own recent maximum,
+  decaying with an 8 s time constant, never below 3.0 nats (so steady music, whose rise is only jitter, is
+  not scaled up until the jitter looks like hits) and never above 7.0 (so one click cannot silence the
+  fountain for long). The history texture's alpha byte now carries this normalized value, and the shader's
+  thresholds are fractions of the hardest hit.
+- Level independence, measured at the final thresholds: the same synthetic song at 1, 1/2, 1/4 and 1/10 of
+  its level gives sparks in nearly the same share of frames (demo 29.9, 29.8, 30.4, 32.2 %; dense 36.9,
+  36.4, 37.7, 40.0 %; the clean percussion track 4.4 % at every level).
+- The thresholds (0.28 to 0.72 of the hardest hit, at sensitivity 1) were set by reproducing the owner's
+  setting on the same real audio. The old rule at sensitivity 3.0 lit sparks in 85.5% of frames (23
+  frequencies when they flew, full strength in 2.4%); the new default at sensitivity 1.0: 86.9%, 24, 2.1%.
+  That is a lot of sparks, but they are scaled by the rise: most frames carry a few small ones, and hard hits
+  throw many large ones.
+- One real recording (30 s) is the whole real-world evidence. The slider stays for everything else.
+
+**Sparks and the floor.** The owner reported fountain sparks "pass through the floor and come back up instead
+of bouncing". A bounce is a position put back above the floor, and the simulation already did that:
+`GEQ_PARTDEBUG=1` reads the particle buffer back and across tens of snapshots no live particle was ever below
+the floor (lowest height 0.0000-0.0006), with about a third of them within 0.06 of it, half of those rising.
+The bounce now sets the height to its absolute value, as the owner described, and a streak's tail is clipped
+at the floor (a spark that has just bounced is moving up, so its tail trailed below the glass).
+
+What can still look like a spark passing through the floor, and what was tried: sparks fly toward and away
+from the camera (a mean 1.8 units from the emitter line, up to 18), so one that lands on the floor in front
+of the line appears below it on screen, and a falling spark's mirror image continues its line below the
+contact point. Keeping the sparks in a thin slab around the line (a spring in depth) removed both, and was
+rejected by the owner: the sparks should fly toward and away from the camera. If it still reads as passing
+through, the remaining options that keep that freedom are dimming and shortening the reflection, or drawing a
+faint spot on the floor under each spark so the point it will hit is visible.

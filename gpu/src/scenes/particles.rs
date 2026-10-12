@@ -102,7 +102,7 @@ impl Particles {
         let buf = dev.create_buffer(&wgpu::BufferDescriptor {
             label: Some("particles"),
             size: count as u64 * PARTICLE_BYTES,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let ubuf = dev.create_buffer(&wgpu::BufferDescriptor {
@@ -133,6 +133,50 @@ impl Particles {
     }
 
     /// Empty the sky and restart the random sequence.
+    /// Development aid (GEQ_PARTDEBUG=1): read the particle buffer back, wait for it, and print where the live
+    /// particles are relative to the floor. Slow; never on in normal use.
+    pub fn debug_report(&self, device: &wgpu::Device, queue: &wgpu::Queue, label: &str) {
+        let bytes = self.count as u64 * PARTICLE_BYTES;
+        let stage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("part_debug"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.copy_buffer_to_buffer(&self.buf, 0, &stage, 0, bytes);
+        queue.submit([enc.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        stage.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r.is_ok());
+        });
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        if rx.recv().unwrap_or(false) {
+            let data = stage.slice(..).get_mapped_range().expect("mapped");
+            let f: &[f32] = bytemuck::cast_slice(&data);
+            let per = (PARTICLE_BYTES / 4) as usize;
+            let (mut live, mut below, mut low, mut min_y, mut falling_low, mut rising_low) = (0u32, 0u32, 0u32, f32::MAX, 0u32, 0u32);
+            let (mut z_sum, mut z_max) = (0.0f32, 0.0f32);
+            for p in f.chunks_exact(per) {
+                // pos (0..3), life (3), vel (4..7), max_life (7)
+                if p[3] > 0.0 && p[7] > 0.0 {
+                    live += 1;
+                    z_sum += p[2].abs();
+                    z_max = z_max.max(p[2].abs());
+                    min_y = min_y.min(p[1]);
+                    if p[1] < 0.0 {
+                        below += 1;
+                    }
+                    if p[1] < 0.06 {
+                        low += 1;
+                        if p[5] < 0.0 { falling_low += 1 } else { rising_low += 1 }
+                    }
+                }
+            }
+            eprintln!("[{label}] live {live}, below the floor {below}, within 0.06 of it {low} ({falling_low} falling, {rising_low} rising), lowest y {min_y:.4}, depth from the emitter line: mean {:.2}, max {:.2}", z_sum / live.max(1) as f32, z_max);
+        }
+    }
+
     pub fn reset(&mut self, seed: u64) {
         self.clear = true;
         self.seed = (seed as u32).wrapping_mul(2654435761).wrapping_add(1);

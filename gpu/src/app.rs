@@ -2,9 +2,9 @@ use crate::analyzer::{Levels, CURVE_POINTS, FLOOR_DB};
 use crate::audio::Audio;
 use crate::bands;
 use crate::clock;
-use crate::modulation::{Modulation, PeakHits, Signals};
+use crate::modulation::{Modulation, PeakHits, RiseNorm, Signals};
 use crate::presets::{self, Idle, Look};
-use crate::render::{Draw, Gpu, PostLook, SceneCallback, BLOOM_LEVELS, HIST_W};
+use crate::render::{Draw, Gpu, PostLook, SceneCallback, BLOOM_LEVELS, HIST_W, RISE_FULL};
 use crate::routing;
 use crate::scenes::{self, CamState, Control, SceneParams};
 use crate::settings::{Settings, Variant, PRESETS};
@@ -109,6 +109,10 @@ pub struct App {
     curve: [f32; CURVE_POINTS],
     curve_l: [f32; CURVE_POINTS],
     curve_r: [f32; CURVE_POINTS],
+    /// How steeply each waterfall bin's volume is rising, relative to the music's own hardest recent hits
+    /// (about 1 at those), for the history rows.
+    rise: [f32; CURVE_POINTS],
+    rise_norm: RiseNorm,
     modn: Modulation,
     sig: Signals,
     levels_f: [f32; 11],
@@ -141,7 +145,7 @@ pub struct App {
 }
 
 fn blank_signals() -> Signals {
-    Signals { fx: [0.0; 4], sus: [0.0; 4], gate: 0.0, rings: [[0.0; 4]; 8], hits: [[0.0; 4]; crate::modulation::HIT_CAP] }
+    Signals { fx: [0.0; 4], sus: [0.0; 4], gate: 0.0, rings: [[0.0; 4]; 8] }
 }
 
 impl App {
@@ -210,6 +214,9 @@ impl App {
         if let Ok(v) = std::env::var("GEQ_BLOOM") {
             cfg.bloom = v.parse().unwrap_or(cfg.bloom);
         }
+        if let Ok(v) = std::env::var("GEQ_GRADIENT") {
+            cfg.spark_sensitivity = v.parse().unwrap_or(cfg.spark_sensitivity);
+        }
         if let Ok(v) = std::env::var("GEQ_DENSITY") {
             cfg.density = v.parse().unwrap_or(cfg.density);
         }
@@ -242,6 +249,8 @@ impl App {
             curve: [FLOOR_DB; CURVE_POINTS],
             curve_l: [FLOOR_DB; CURVE_POINTS],
             curve_r: [FLOOR_DB; CURVE_POINTS],
+            rise: [0.0; CURVE_POINTS],
+            rise_norm: RiseNorm::new(),
             modn: Modulation::new(),
             sig: blank_signals(),
             levels_f: [0.0; 11],
@@ -330,6 +339,7 @@ impl App {
         smooth(&mut self.curve, &lv.curve);
         smooth(&mut self.curve_l, &lv.curve_l);
         smooth(&mut self.curve_r, &lv.curve_r);
+        self.rise = self.rise_norm.update(&lv.rise, dt);
         for i in 0..11 {
             self.levels_f[i] = self.frac(self.disp[i]);
             self.peaks_f[i] = if self.cfg.peak_caps { self.frac(self.peak[i]) } else { 0.0 };
@@ -463,7 +473,7 @@ impl App {
             persist: self.cfg.persistence,
             sparks: self.cfg.sparks,
             density: self.cfg.density,
-            hits: sig.hits,
+            gradient: self.cfg.spark_sensitivity,
             peak_hits: self.peak_hits,
         }
     }
@@ -757,6 +767,7 @@ impl eframe::App for App {
                     row[4 * k] = (self.frac(self.curve_l[k]) * 255.0) as u8;
                     row[4 * k + 1] = (self.frac(self.curve_r[k]) * 255.0) as u8;
                     row[4 * k + 2] = (self.frac(self.curve[k]) * 255.0) as u8;
+                    row[4 * k + 3] = (self.rise[k] / RISE_FULL * 255.0).clamp(0.0, 255.0) as u8;
                 }
                 rows.push(row);
             }
@@ -1216,6 +1227,13 @@ impl App {
                     }
                     Control::Sparks => {
                         ui.checkbox(&mut self.cfg.sparks, "Sparks").on_hover_text("Embers off the lit columns, and sparks when a peak cap rises").changed().then(|| touched = true);
+                    }
+                    Control::Gradient => {
+                        ui.label(RichText::new("SPARKS").small().weak());
+                        touched |= ui
+                            .add(egui::Slider::new(&mut self.cfg.spark_sensitivity, 0.4..=3.0).logarithmic(true).text("sensitivity"))
+                            .on_hover_text("How steeply the volume at a frequency must rise to throw sparks. Higher = more sparks.")
+                            .changed();
                     }
                     Control::Density => {
                         ui.label(RichText::new("PARTICLES").small().weak());
