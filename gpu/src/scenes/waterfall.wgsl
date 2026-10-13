@@ -126,16 +126,6 @@ struct FloorOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> 
   return FloorOut(u.vp * vec4<f32>(w, 1.0), w);
 }
 
-// A long light bar overhead, seen as a straight band across the glass. `t` is the tangent of the
-// reflected ray's elevation toward the far end of the floor, which is constant along a line of
-// constant depth; `half_t` is the bar's half width in that measure and `half_x` how far it extends sideways.
-fn lightbar(r: vec3<f32>, t0: f32, half_t: f32, half_x: f32) -> f32 {
-  let fz = max(-r.z, 0.05);
-  let t = r.y / fz;
-  let lx = abs(r.x) / fz;
-  return smoothstep(half_t * 2.6, half_t * 0.4, abs(t - t0)) * smoothstep(half_x + 0.8, half_x, lx);
-}
-
 @fragment fn fs_wfloor(in: FloorOut) -> @location(0) vec4<f32> {
   let to_cam = u.cam.xyz - in.wp;
   let dist = length(to_cam);
@@ -144,8 +134,6 @@ fn lightbar(r: vec3<f32>, t0: f32, half_t: f32, half_x: f32) -> f32 {
   let fres = 0.07 + 0.93 * pow(1.0 - cosv, 5.0);            // glass: dim reflection from above, strong when grazing
   let dom = palette(0.25, 0.5);
   let fade = 1.0 - smoothstep(20.0, 130.0, dist);
-  let r = vec3<f32>(-v.x, v.y, -v.z);                       // where a ray mirrored by the glass goes: up into the sky
-  let pa = length(fwidth(r)) * 0.58;
 
   // The grid is etched into the surface, at zero level where the waterfall stands, so the terrain and its
   // reflection meet it at the same place.
@@ -182,12 +170,6 @@ fn lightbar(r: vec3<f32>, t0: f32, half_t: f32, half_x: f32) -> f32 {
     if (u.mode > 0.5) { lit = STEREO_L * hb.x * hb.x + STEREO_R * hb.y * hb.y; }
     c += lit * exp(-abs(ez) * 1.1) * wall_fade(f32(NZ - 1u)) * (1.0 - smoothstep(SIDE_X, SIDE_X + 3.0, abs(in.wp.x))) * 0.12;
   }
-
-  // what the glass mirrors of the sky: three long light bars (they slide as the view moves) and a
-  // faint glow toward the horizon
-  let boxes = 2.4 * lightbar(r, 1.35, 0.07, 3.0) + 1.8 * lightbar(r, 0.95, 0.025, 3.5) + 1.3 * lightbar(r, 0.62, 0.03, 2.5);
-  c += mix(dom, vec3<f32>(1.0), 0.3) * boxes * fres;
-  c += sky_color(r, pa, false) * (0.14 + 0.86 * pow(1.0 - cosv, 3.0));   // the sky, mirrored in the glass
 
   return vec4<f32>(mix(sky_fog(), c, fade) * u.exposure, 1.0);
 }

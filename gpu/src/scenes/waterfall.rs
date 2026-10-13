@@ -1,7 +1,8 @@
 use super::*;
 
 /// Spectrum history as a scrolling wireframe terrain inside a box of glass walls (front, both sides
-/// and back), standing on a glass floor under a night sky; the floor reflects all of it.
+/// and back), standing on a glass floor under a night sky; the floor mirrors the box and terrain but
+/// not the sky.
 pub struct Waterfall {
     sky: wgpu::RenderPipeline,
     floor: wgpu::RenderPipeline,

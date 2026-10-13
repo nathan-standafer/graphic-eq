@@ -629,6 +629,11 @@ about 4 ms median (12 ms worst) after a detection delay of up to one 10 ms hop.
   show. The biggest single gains were structural: drawing the opaque terrain first so the depth test skips
   the floor and reflections behind it (-0.6 ms), and discarding the stereo overlay's empty pixels instead of
   blending zeros (-1.2 ms in stereo, which ended up cheaper than before the sky).
+- The glass floor no longer mirrors the sky (the owner asked for it removed): the floor shader drops the
+  three light-bar reflections and the mirrored `sky_color` call, and the sky's reduced "mirror" variant
+  (`full = false`: no nebula, no shockwave, fewer stars) is gone with its only caller. The terrain, wall
+  and edge-line reflections stay. Scene GPU time at 5120x1372 fell by about 0.4 ms in every timing window
+  of a synthetic run (4.35 to 3.95, 4.86 to 4.47, 5.69 to 5.30 ms).
 - The camera's far plane (100 units) clips the floor long before its 600-unit edge. Once the fog at the
   horizon was lighter than the clear colour that showed as a black strip, so the sky quad now reaches below
   the horizon far enough to paint the fog there.

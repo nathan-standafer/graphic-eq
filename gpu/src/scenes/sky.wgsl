@@ -170,13 +170,12 @@ fn sky_planet(bg: vec3<f32>, d: vec3<f32>, pa: f32, c: vec3<f32>, tr: f32, ca: v
   return col;
 }
 
-// The whole sky in HDR (before exposure) for a view direction. `full` adds the finest star layer and
-// the nebula, which a blurred mirror image does not need.
-fn sky_color(d: vec3<f32>, pa: f32, full: bool) -> vec3<f32> {
+// The whole sky in HDR (before exposure) for a view direction.
+fn sky_color(d: vec3<f32>, pa: f32) -> vec3<f32> {
   let dom = palette(0.0, 0.5);
   let pulse = clamp(u.fx.x, 0.0, 1.5) * (0.7 + 1.2 * u.flash);   // bass onsets
   let swell = u.sus.x;                                           // sustained bass
-  let wave = select(0.0, sky_wave(d), full);                      // the mirror skips the shockwave
+  let wave = sky_wave(d);
   let e = max(d.y, 0.0);
 
   // haze along the horizon
@@ -186,7 +185,7 @@ fn sky_color(d: vec3<f32>, pa: f32, full: bool) -> vec3<f32> {
   // a nebula band crossing the view
   let off = (dot(d, vec3<f32>(0.26, -0.965, 0.0)) + 0.10) / 0.22;
   let band = exp(-off * off);
-  if (full && band > 0.03) {
+  if (band > 0.03) {
     let p = d * 3.0 + vec3<f32>(0.0, 0.0, u.t * 0.01);
     let f = 0.6 * sky_cloud(p) + 0.4 * sky_cloud(p * 2.3 + 5.0);
     let neb = pow(clamp((f - 0.42) * 2.2, 0.0, 1.0), 1.5);
@@ -197,10 +196,9 @@ fn sky_color(d: vec3<f32>, pa: f32, full: bool) -> vec3<f32> {
   if (d.y > 0.005) {
     let face = sky_face(d);
     let acc = palette(1.0, 0.5);
-    let sg = select(0.6, 1.0, full);                            // a mirror image is fainter and softer
-    var stars = sky_stars(face, pa, 11.0, 0.30, 0.0015, 2.2 * sg, 3.0, pulse, wave, dom, acc);
-    if (full || u.mode < 0.5) { stars += sky_stars(face, pa, 28.0, 0.35 + 0.25 * band, 0.0012, 0.9 * sg, 2.0, pulse, wave, dom, acc); }   // the stereo mirror keeps only the bright ones
-    if (full) { stars += sky_stars(face, pa, 70.0, 0.34 + 0.2 * band, 0.0007, 0.38, 1.0, pulse, wave, dom, acc); }
+    var stars = sky_stars(face, pa, 11.0, 0.30, 0.0015, 2.2, 3.0, pulse, wave, dom, acc);
+    stars += sky_stars(face, pa, 28.0, 0.35 + 0.25 * band, 0.0012, 0.9, 2.0, pulse, wave, dom, acc);
+    stars += sky_stars(face, pa, 70.0, 0.34 + 0.2 * band, 0.0007, 0.38, 1.0, pulse, wave, dom, acc);
     c += stars * smoothstep(0.005, 0.10, d.y);
   }
 
@@ -268,5 +266,5 @@ struct SkyOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
   let pa = length(fwidth(d)) * 0.58;
   // below the horizon is only the fog the far floor fades into
   if (d.y <= 0.0) { return vec4<f32>(sky_fog() * u.exposure, 1.0); }
-  return vec4<f32>(sky_color(d, pa, true) * u.exposure, 1.0);
+  return vec4<f32>(sky_color(d, pa) * u.exposure, 1.0);
 }
