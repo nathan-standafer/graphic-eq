@@ -2,7 +2,7 @@
 //! scene. They are separate from the EQ presets and never touch gains, bypass or routing.
 
 use crate::render::BLOOM_LEVELS;
-use crate::scenes::{COLUMNS, FOUNTAIN, TUNNEL, VECTORSCOPE, WATERFALL};
+use crate::scenes::{COLUMNS, FOUNTAIN, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
 
 /// Idle camera path amplitudes at Motion = 1: yaw, pitch (radians), dolly (fraction), roll (radians).
 #[derive(Clone, Copy)]
@@ -36,8 +36,10 @@ const TUNNEL_IDLE: Idle = Idle { yaw: 0.06, pitch: 0.04, zoom: 0.05, roll: 0.07 
 /// The scope is a flat instrument: nothing drifts.
 const SCOPE_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
 const FOUNTAIN_IDLE: Idle = Idle { yaw: 0.07, pitch: 0.02, zoom: 0.04, roll: 0.0 };
+/// The smoke is a flat picture with no camera.
+const SMOKE_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
 
-pub const LOOKS: [Look; 18] = [
+pub const LOOKS: [Look; 22] = [
     // ---- columns
     Look {
         scene: COLUMNS, name: "Studio", theme: 0, exposure: 1.0,
@@ -132,6 +134,28 @@ pub const LOOKS: [Look; 18] = [
         scene: FOUNTAIN, name: "Spectrum Jets", theme: 4, exposure: 0.9,
         bloom: [0.30, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.9, knee: 0.5, vignette: 0.5,
         motion: 0.5, flash: 0.7, idle: FOUNTAIN_IDLE,
+    },
+    // ---- smoke jets: the smoke is soft, so the halo is wide and gentle and the highlights stay near the lamps
+    // (Motion is turbulence here: how much the plumes wobble and roll up)
+    Look {
+        scene: SMOKE, name: "Ice Vent", theme: 2, exposure: 1.0,
+        bloom: [0.26, 0.34, 0.32, 0.24, 0.15, 0.09], threshold: 0.85, knee: 0.5, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: SMOKE_IDLE,
+    },
+    Look {
+        scene: SMOKE, name: "Ember Smoke", theme: 1, exposure: 1.0,
+        bloom: [0.24, 0.32, 0.34, 0.26, 0.17, 0.10], threshold: 0.8, knee: 0.5, vignette: 0.6,
+        motion: 0.6, flash: 0.8, idle: SMOKE_IDLE,
+    },
+    Look {
+        scene: SMOKE, name: "Neon Haze", theme: 3, exposure: 0.95,
+        bloom: [0.26, 0.34, 0.32, 0.24, 0.15, 0.09], threshold: 0.85, knee: 0.5, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: SMOKE_IDLE,
+    },
+    Look {
+        scene: SMOKE, name: "Prism Plumes", theme: 4, exposure: 0.9,
+        bloom: [0.24, 0.32, 0.30, 0.22, 0.14, 0.08], threshold: 0.9, knee: 0.5, vignette: 0.5,
+        motion: 0.6, flash: 0.7, idle: SMOKE_IDLE,
     },
 ];
 

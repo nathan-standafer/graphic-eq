@@ -11,6 +11,7 @@ use std::collections::HashMap;
 pub mod columns;
 pub mod fountain;
 pub mod particles;
+pub mod smoke;
 pub mod sparks;
 pub mod tunnel;
 pub mod vectorscope;
@@ -22,7 +23,8 @@ pub const WATERFALL: u32 = 1;
 pub const TUNNEL: u32 = 2;
 pub const VECTORSCOPE: u32 = 3;
 pub const FOUNTAIN: u32 = 4;
-pub const ALL: [u32; 5] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN];
+pub const SMOKE: u32 = 5;
+pub const ALL: [u32; 6] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE];
 
 pub const DEPTH_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const MSAA: u32 = 4;
@@ -111,6 +113,11 @@ pub struct SceneParams {
     pub gradient: f32,
     /// Per column: how far its peak cap rose this frame in a burst-worthy push (0 = no burst).
     pub peak_hits: [f32; 11],
+    /// How thick the smoke jets blow (1 = designed).
+    pub smoke: f32,
+    /// Where each EQ band's slider stands across the scene, as a fraction of its width (the smoke nozzles
+    /// stand over them in windowed mode).
+    pub nozzle_x: [f32; 11],
 }
 
 /// What `update` and `draw` see besides the pipeline state: the frame's parameters and target size.
@@ -157,6 +164,8 @@ pub enum Control {
     Density,
     /// How steeply the volume must rise to throw sparks.
     Gradient,
+    /// How thick the smoke jets blow.
+    SmokeThickness,
 }
 
 pub struct SceneInfo {
@@ -169,7 +178,7 @@ pub struct SceneInfo {
     pub cost_ms: f32,
 }
 
-const INFOS: [SceneInfo; 5] = [
+const INFOS: [SceneInfo; 6] = [
     SceneInfo {
         id: COLUMNS,
         name: "3D columns",
@@ -205,6 +214,14 @@ const INFOS: [SceneInfo; 5] = [
         cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
         controls: &[Control::Gradient, Control::Density],
         cost_ms: 0.8,
+    },
+    SceneInfo {
+        id: SMOKE,
+        name: "Smoke Jets",
+        // a flat picture: the camera does not move
+        cam: CamLimits { yaw: 0.0, pitch: (0.0, 0.0), zoom: (1.0, 1.0) },
+        controls: &[Control::SmokeThickness],
+        cost_ms: 1.8,
     },
 ];
 
@@ -312,6 +329,7 @@ fn create(id: u32, ctx: &Ctx) -> Box<dyn Scene> {
         TUNNEL => Box::new(tunnel::Tunnel::new(ctx)),
         VECTORSCOPE => Box::new(vectorscope::Vectorscope::new(ctx)),
         FOUNTAIN => Box::new(fountain::Fountain::new(ctx)),
+        SMOKE => Box::new(smoke::Smoke::new(ctx)),
         _ => Box::new(columns::Columns::new(ctx)),
     }
 }

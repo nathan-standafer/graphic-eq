@@ -16,4 +16,6 @@ shot 2 0 2-neon-conduit 12;  shot 2 1 2-ice-core 12;      shot 2 2 2-ember-flue 
 shot 3 0 3-p31-green 12;     shot 3 1 3-amber-scope 12;   shot 3 2 3-ice-trace 12;   shot 3 3 3-neon-lissajous 12
 # the fountain throws sparks where the volume rises: 13.6 s is a kick and a snare landing together
 shot 4 0 4-ice-geyser 13.6;    shot 4 1 4-ember-fountain 13.6; shot 4 2 4-neon-spray 13.6; shot 4 3 4-spectrum-jets 13.6
+# the smoke needs twenty seconds of the groove to fill the screen
+shot 5 0 5-ice-vent 22;        shot 5 1 5-ember-smoke 22;      shot 5 2 5-neon-haze 22;     shot 5 3 5-prism-plumes 22
 cargo build --release

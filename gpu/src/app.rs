@@ -120,6 +120,10 @@ pub struct App {
     /// Peak-cap pushes (see `modulation::PeakHits`) and the bursts due this frame.
     peak_tracker: PeakHits,
     peak_hits: [f32; 11],
+    /// Where the EQ sliders stand across the window (points), measured by the strip each frame; None when it is hidden.
+    strip_x: Option<[f32; 11]>,
+    /// The smoke nozzles' places across the scene (fractions of its width): over the sliders when they show.
+    nozzle_x: [f32; 11],
     now: f64,
     last_wall: f64,
     stepped: Option<f32>,
@@ -257,6 +261,8 @@ impl App {
             peaks_f: [0.0; 11],
             peak_tracker: PeakHits::new(),
             peak_hits: [0.0; 11],
+            strip_x: None,
+            nozzle_x: std::array::from_fn(|i| (i as f32 + 0.5) / 11.0),
             now: 0.0,
             last_wall: clock::now(),
             stepped,
@@ -475,6 +481,8 @@ impl App {
             density: self.cfg.density,
             gradient: self.cfg.spark_sensitivity,
             peak_hits: self.peak_hits,
+            smoke: self.cfg.smoke_density,
+            nozzle_x: self.nozzle_x,
         }
     }
 
@@ -751,6 +759,11 @@ impl eframe::App for App {
             }
             let ppp = ctx.pixels_per_point();
             let size_px = [(rect.width() * ppp) as u32, (rect.height() * ppp) as u32];
+            // the smoke nozzles stand over the sliders in windowed mode, and evenly spaced when those are hidden
+            self.nozzle_x = match self.strip_x.filter(|_| !self.fullscreen && !self.bare && rect.width() > 1.0) {
+                Some(c) => std::array::from_fn(|i| ((c[i] - rect.left()) / rect.width()).clamp(0.0, 1.0)),
+                None => std::array::from_fn(|i| (i as f32 + 0.5) / 11.0),
+            };
             if size_px != self.diag.last_size {
                 self.diag.last_size = size_px;
                 self.diag.resize_cooldown = 12;
@@ -891,8 +904,10 @@ impl App {
                 theme_color(self.cfg.theme, t)
             };
             let _ = look;
+            let mut centres = [0.0f32; bands::COUNT];
             ui.columns(bands::COUNT, |cols| {
                 for (i, col) in cols.iter_mut().enumerate() {
+                    centres[i] = col.max_rect().center().x;
                     col.vertical_centered(|ui| {
                         let mut g = self.cfg.gains[i];
                         let lit = self.levels_f[i];
@@ -949,6 +964,7 @@ impl App {
                     });
                 }
             });
+            self.strip_x = Some(centres);
             if changed {
                 self.cfg.preset = CUSTOM.into();
                 self.push_gains();
@@ -1242,6 +1258,13 @@ impl App {
                             .on_hover_text("How many particles the fountain launches")
                             .changed();
                     }
+                    Control::SmokeThickness => {
+                        ui.label(RichText::new("SMOKE").small().weak());
+                        touched |= ui
+                            .add(egui::Slider::new(&mut self.cfg.smoke_density, 0.3..=2.0).text("thickness"))
+                            .on_hover_text("How much smoke each jet blows. Lower gives delicate wisps, higher dense plumes.")
+                            .changed();
+                    }
                     Control::ScopePersistence => {
                         ui.label(RichText::new("PERSISTENCE").small().weak());
                         touched |= ui
@@ -1259,10 +1282,15 @@ impl App {
             ui.add_space(4.0);
             egui::Grid::new("look_opts").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
                 ui.label("Motion");
-                touched |= ui.add(egui::Slider::new(&mut self.cfg.motion, 0.0..=1.5)).on_hover_text("Camera drift, banking and wall breathing. 0 holds everything still.").changed();
+                let motion_tip = if self.cfg.scene == scenes::SMOKE {
+                    "Turbulence: how much the plumes wobble and roll up. 0 gives smooth, straight columns."
+                } else {
+                    "Camera drift, banking and wall breathing. 0 holds everything still."
+                };
+                touched |= ui.add(egui::Slider::new(&mut self.cfg.motion, 0.0..=1.5)).on_hover_text(motion_tip).changed();
                 ui.end_row();
                 ui.label("Flash");
-                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses. 0 turns them off.").changed();
+                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses (puffs from the smoke jets). 0 turns them off.").changed();
                 ui.end_row();
                 ui.label("Glow");
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.bloom, 0.0..=2.0)).changed();

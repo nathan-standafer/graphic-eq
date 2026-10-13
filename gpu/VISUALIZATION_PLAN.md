@@ -833,3 +833,90 @@ contact point. Keeping the sparks in a thin slab around the line (a spring in de
 rejected by the owner: the sparks should fly toward and away from the camera. If it still reads as passing
 through, the remaining options that keep that freedom are dimming and shortening the reflection, or drawing a
 faint spot on the floor under each spark so the point it will hit is visible.
+
+## Milestone 4: Smoke Jets (scene 5)
+
+The plan's `L` subsystem: eleven plumes tied to the EQ bands, on a 2D stable-fluids solver. IDs: 5 = Smoke Jets.
+
+**Shipped**
+
+- `scenes/smoke.rs`, `smoke_sim.wgsl` (every offscreen pass), `smoke.wgsl` (the screen pass) and `smoke_common.wgsl`
+  (the uniform block). Fragment passes on a grid of square cells about four screen pixels wide (1280 x 360 at
+  full screen, never fewer than 192 rows, so a small window shows an enlarged simulation instead of a coarse
+  one), with the dye advected at twice that resolution. Velocity is `Rg16Float`, pressure/curl/divergence
+  `R16Float`, dye `Rgba16Float` (density, heat, band position x density, accent). All filterable and
+  renderable with no optional features; the one bind group layout (uniform, sampler, three textures) serves
+  every pass, with a 1x1 texture filling unused slots.
+- One step: curl, forces (vorticity confinement, buoyancy of the hot smoke, the nozzles), divergence, 18
+  Jacobi iterations warm-started from the previous step's pressure, gradient subtraction, MacCormack
+  velocity advection (two passes), MacCormack dye advection with decay and injection (two passes). The
+  solver runs on a fixed 1/120 s step through an accumulator that rounds instead of flooring (a steady 120 Hz
+  is exactly one step a frame whatever the clock jitter; 60 fps runs two, a stall is capped at four and the
+  backlog dropped). A scene absent for 30 frames, a reset or a resize starts from clear air; `reset(seed)`
+  seeds the wobble, and two captures of the same run are byte-identical.
+- Open top, closed free-slip floor and side walls. The nozzles stand half a spacing from each side wall, so a
+  wall is a mirror image at exactly the neighbours' spacing and the outer plumes behave like the inner ones.
+- The drive is plain Rust (`drive()`, unit-tested): band level -> jet strength above a noise floor (a quiet
+  band is a faint wisp, a closed gate blows nothing); the onset envelope of the band's region (low for the
+  bass bands, mid, high, blended over the seams, times Flash) -> a puff that flares the nozzle and adds speed,
+  density and accent; bass nozzles wide and slow, treble narrow and fast; Thickness scales the density. The
+  nozzles take their x from the EQ strip's measured column centres in windowed mode (`SceneParams::nozzle_x`),
+  evenly spaced otherwise. Silence raises the smoke's decay so what is left dissipates.
+- Lighting at dye resolution: a bump normal from the density gradient, self-shadowing by the smoke below (four
+  taps), light from lamps on the floor that widens and fades with height, a haze behind the smoke. The result
+  is four scalars (brightness, emission, accent, band position); the screen pass colours them from the theme
+  (dominant to supporting along the bands, a small accent for puffs; Rainbow follows the band), so two looks
+  of the scene crossfade with their own palettes. The screen pass also draws the floor strip and a lamp in
+  every nozzle, which stay on screen in silence.
+- Four looks (Ice Vent, Ember Smoke, Neon Haze, Prism Plumes), stored thumbnails, a Thickness slider, Motion
+  as turbulence (it scales the confinement and the nozzles' wobble) with its own tooltip, settings that
+  load files from before the sixth scene (`look` grows, `smoke_density` defaults to 1).
+
+**Measured** (5120x1440, real time, synthetic demo and dense signals, GPU times from timestamp queries)
+
+| Scene | fps | Solver + shading (`scene_upd`) | Screen pass | Bloom |
+|-------|-----|--------------------------------|-------------|-------|
+| Smoke Jets, 18 iterations | 120.0 | 1.45 ms | 0.33 ms | 0.45 ms |
+| 6 iterations / 40 iterations | 120.0 | 1.05 / 2.15 ms | 0.33 ms | 0.45 ms |
+
+A pressure iteration costs 0.03 ms, and everything else in the step about 0.85 ms (the four MacCormack
+passes about 0.3 of it). The dense fixture costs the same as the demo (the cost does not depend on the
+picture). Crossfades into the scene and between two looks of it (one simulation, two draws) held 120 fps with
+p99 9-14 ms. The textures come to about 70 MB at full screen (computed from their sizes, not measured). The frame-time tail during these runs (p99 9-20 ms, max
+17-23 ms) is not the scene's: the Fountain, measured minutes before in the same session, showed the same
+hitches (p99 up to 18 ms) where it had been 9.1 ms on another day, so this machine was busy; the first
+smoke run, before MacCormack, had p99 9.2 ms.
+
+**Findings worth keeping**
+
+- Vorticity confinement is unstable at a useful strength. Its force is proportional to the curl, so a thin
+  shear layer grows by (strength x dt) a step: at 13 cells/s that is 10 % a step, and after 30 s the field
+  held single-row jets pinned at the speed limit, which drew as hard axis-aligned voids in the smoke. A
+  clamped curl and a much smaller strength fixed it. Plain semi-Lagrangian advection at 120 steps a second
+  also blurs every step, which is why the first version needed confinement at all; with MacCormack (a forward
+  pass, a backward pass to estimate the error, a correction held inside the range the trace-back read)
+  vortices keep their strength, a puff rolls up into a ring that actually travels, and the confinement could
+  drop to almost nothing.
+- Non-dissipative advection needs a little dissipation of its own. Without it the dye turned to fine marbling
+  and the velocity kept every cell-sized ripple, and the screen filled with noise. A small viscosity and dye
+  diffusion (scaled with the grid, so a small window does not look fatter), a faster density decay and a
+  thin-smoke loss gave dark space around the plumes back. Delicate wisps come from low injection, not from
+  how long the leftovers live.
+- The pressure iteration count is an art parameter, not only a quality one: 4 iterations stand the plumes up as
+  tall columns that reach the top (the projection is leaky), 18 gives S-curves and caps about half the height,
+  60 is lower still. Jet speed was raised (0.64 to 1.10 screen heights a second, bass to treble) to get tall
+  plumes with 18.
+- The wobble that makes plumes sway must not have regular phases: with phases a fixed step apart every plume
+  flapped the same way, the same way in every capture. Irregular phases, slow for bass and quicker for treble,
+  give each plume its own meander.
+- Colouring in the screen pass instead of in the simulation passes is what lets a look change crossfade
+  correctly; the lit field costs one bilinear read per full-resolution pixel.
+- Resolution independence needs every length in cells to scale with the grid height (speeds, widths, buoyancy,
+  confinement) and the numerical smoothing to scale with it too; the nozzles' vertical extent is the one thing
+  still fixed in cells.
+- Nothing here has been heard on real music, which this machine does not have; only the synthetic songs. The
+  jets follow the calibrated levels (a recording quieter than about -45 dB blows little smoke; Sensitivity is the
+  control) while puffs follow the normalized onset envelopes.
+
+**Not done yet**: a quality setting for the grid and iteration count (the cost is low enough to leave at 1.45 ms),
+a render scale for the shading pass, and tuning on real music.

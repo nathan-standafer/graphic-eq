@@ -68,6 +68,14 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   across the outer thirds as triggered traces. The picture follows the signal's level so quiet music
   still fills the tube; silence leaves just the graticule.
 
+- **Smoke Jets** - eleven nozzles along the floor, one per EQ band, each blowing smoke upward from a lamp
+  that burns with its band; in windowed mode they stand over their sliders. It is a real fluid (a 2D
+  stable-fluids solver on the GPU), so plumes sway, shed vortices and curl into their neighbours: a louder
+  band is a stronger jet (bass wide and slow, treble narrow and fast), and a drum hit is a puff that rolls up
+  into a mushroom-headed vortex ring. The smoke fades from bright, lit bases into darker translucent curls,
+  and clears when the music stops. Display menu: **thickness** (delicate wisps to dense plumes); **Motion**
+  is turbulence here (0 gives smooth, straight columns) and **Flash** scales the puffs.
+
 **Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
 (your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip
 appears on mouse movement and fades after a few seconds. Display menu: looks, colors, **Motion**
@@ -92,6 +100,7 @@ audio: no EQ engine, no routing changes, settings are read-only.
 `GEQ_PRESET`, `GEQ_THEME`, `GEQ_BLOOM`, `GEQ_MOTION`, `GEQ_FLASH`, `GEQ_STEREO`, `GEQ_ORBIT`,
 `GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor),
 `GEQ_GRADIENT=n` (fountain spark sensitivity), `GEQ_DENSITY=n` (fountain particle density), `GEQ_SPARKS=0` (columns without sparks),
+`GEQ_SMOKE_ITERS=n` (pressure iterations of the smoke solver, default 18; it changes how tall the plumes stand),
 `GEQ_CYCLE=secs` (auto-cycle scenes), `GEQ_LATENCY=1` (onset delivery delay), `GEQ_BROWSER=1`,
 `GEQ_VIEW=scene|bloom|nan` (composite debug views). `tools/make-thumbs.sh` regenerates the look
 thumbnails from real captures. `cargo test` covers the synthetic source, onset detection, and the
