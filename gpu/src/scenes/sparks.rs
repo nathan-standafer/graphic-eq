@@ -1,8 +1,10 @@
 use super::*;
 use super::particles::{Particles, SpawnPlan};
+use crate::modulation::{LED_SEGMENTS, PEAK_HIT_MIN};
 
 /// Embers and sparks over the 3D columns: each lit column sheds embers from the top of its strip in
-/// proportion to its level, and a column that pushes its peak cap higher throws a fan of sparks. A small
+/// proportion to its level, and a column whose peak cap jumps at least five LED segments throws a fan of
+/// sparks, more and bigger the further it jumped. A small
 /// system on the same compute machinery as the fountain, drawn inside the columns' own pass so the
 /// columns' depth hides what is behind them.
 pub struct Sparks {
@@ -18,6 +20,11 @@ const MAX_LIFE: f32 = 3.0;
 const EMBER_RATE: f32 = 60.0;
 /// A column must be above this level to shed embers.
 const EMBER_FLOOR: f32 = 0.12;
+/// A burst's size runs from the smallest push that throws one (`PEAK_HIT_MIN`, five segments) to this many
+/// segments, and grows with it: the particle count, and in the shader their size, speed and life.
+const FULL_PUSH_SEGMENTS: f32 = 25.0;
+const BURST_MIN: f32 = 45.0;
+const BURST_MAX: f32 = 300.0;
 
 impl Sparks {
     pub fn new(ctx: &Ctx) -> Sparks {
@@ -51,9 +58,12 @@ impl Sparks {
         let cont = self.carry.floor();
         self.carry -= cont;
         let mut plan = SpawnPlan { cont: cont as u32, bursts: Vec::new() };
+        let first = PEAK_HIT_MIN * LED_SEGMENTS;
         for (i, s) in p.peak_hits.iter().enumerate().filter(|(_, s)| **s > 0.0) {
             if plan.bursts.len() < 6 {
-                plan.bursts.push([i as f32, *s, 0.0, (30.0 + 140.0 * s.min(1.0)) * p.gate]);
+                // 0 for the smallest push that throws sparks, 1 for a jump of `FULL_PUSH_SEGMENTS` or more
+                let size = ((s * LED_SEGMENTS - first) / (FULL_PUSH_SEGMENTS - first)).clamp(0.0, 1.0);
+                plan.bursts.push([i as f32, size, 0.0, (BURST_MIN + (BURST_MAX - BURST_MIN) * size) * p.gate]);
             }
         }
         let extra = [[cdf[0], cdf[1], cdf[2], cdf[3]], [cdf[4], cdf[5], cdf[6], cdf[7]], [cdf[8], cdf[9], cdf[10], 0.0], [0.0; 4]];

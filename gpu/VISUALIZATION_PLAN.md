@@ -392,7 +392,7 @@ quality settings. Needs F2b/F2f and the F5 non-MSAA path. The algorithmic starti
 ### 6. Sparks and Fountain — L for the particle system, then S each
 
 **Sparks** is an overlay on the existing 3D columns: each column sheds embers from its top in
-proportion to its level, and throws a burst when it pushes its peak cap higher. **Fountain** is its
+proportion to its level, and throws a burst when its peak cap jumps by five or more LED segments. **Fountain** is its
 own scene: the 192-bin spectrum line launches particles upward at a speed set by the level; they arc
 under gravity and bounce on the reflective floor.
 
@@ -717,9 +717,9 @@ F4, compute particles, and the two things the plan hangs on it.
   threshold) and a density slider.
 - Sparks (an overlay on the columns): 16,384 particles on the same machinery, drawn inside the columns'
   multisampled pass so their depth hides what is behind them. Embers shed from the top of each lit strip
-  (a column is chosen by running weights the CPU sends), sparks burst from a peak cap when it rises
-  (`modulation::PeakHits` turns the cap's per-frame creep into discrete, rate-limited bursts, since a
-  cap sitting at its peak would otherwise count as a push every frame). A Display-menu checkbox.
+  (a column is chosen by running weights the CPU sends), sparks burst from a peak cap when it jumps at
+  least five LED segments, bigger the further it jumped (`modulation::PeakHits`, see the findings below).
+  A Display-menu checkbox.
 
 **Measured** (5120x1440, real time, the demo signal's loudest seconds, and the dense fixture)
 
@@ -734,6 +734,16 @@ because thousands of jets were alive at once; sparks only fly when something is 
 
 **Findings worth keeping**
 
+- Column sparks are rare and big on purpose. The first rule (a cap rising about one segment, 3% of the
+  scale) fired 520 times in 60 s of the demo signal, on almost every column at every beat, and a single hit
+  was reported as two bursts because the rate limit split its climb (a hit's cap rises over about four
+  frames: 3.3, 3.8, 1.1 and 1.0 segments). Now a push has to add up to five of the strip's 30 segments within
+  a quarter second, and is reported once it has settled (the cap has not risen for 25 ms, or 80 ms into a long
+  climb), so one hit is one burst measured by the whole push: 108 bursts in the same 60 s, and a slow climb
+  or a staircase of single segments never adds up to one. Burst size runs from 5 segments (45 particles) to
+  25 or more (300), and the sparks' size, speed and life grow with it, so a 5-segment hit is a small
+  spray and a 20-segment one a bright flash. Constants: `PEAK_HIT_*` in `modulation.rs`, `BURST_*` and
+  `FULL_PUSH_SEGMENTS` in `sparks.rs`. Frame time and scene GPU time (2.1 ms) did not change.
 - Particle density, not particle count, is the design variable. The first version emitted 52,000 a second
   and was a white cloud at every setting; what reads as a fountain is a few thousand alive at a time, with
   streaks long enough to show the arcs. "Capacity" in the plan is just headroom for the density slider.

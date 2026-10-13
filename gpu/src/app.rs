@@ -1226,7 +1226,7 @@ impl App {
                         ui.checkbox(&mut self.cfg.peak_caps, "Peak hold").changed().then(|| touched = true);
                     }
                     Control::Sparks => {
-                        ui.checkbox(&mut self.cfg.sparks, "Sparks").on_hover_text("Embers off the lit columns, and sparks when a peak cap rises").changed().then(|| touched = true);
+                        ui.checkbox(&mut self.cfg.sparks, "Sparks").on_hover_text("Embers off the lit columns, and sparks when a peak cap jumps 5 or more segments (the bigger the jump, the bigger the burst)").changed().then(|| touched = true);
                     }
                     Control::Gradient => {
                         ui.label(RichText::new("SPARKS").small().weak());

@@ -95,39 +95,68 @@ impl RiseNorm {
     }
 }
 
-/// A peak cap pushes higher on every frame its level sits at the peak, so rises are summed, and a burst
-/// is reported only once they add up to something visible, no more often than every `PEAK_HIT_GAP`
-/// seconds per column. Small old rises fade away instead of adding up for ever.
+/// The LED strip of a 3D column has this many segments (`columns.wgsl`: `COL_MAX_H / SEG`), so a peak cap's
+/// position is counted in them.
+pub const LED_SEGMENTS: f32 = 30.0;
+
+/// A peak cap pushes higher on every frame its level sits at the peak, so rises are summed over a short
+/// window, and a burst is reported when a push has added up to `PEAK_HIT_MIN` and settled: one hit is one
+/// burst, as big as the whole push (a hit's cap climbs over a few frames, and reporting the first part would
+/// split it in two and understate both). Rises older than the window no longer count, so a slow climb never
+/// adds up to a hit, and pushes that follow each other within `PEAK_HIT_GAP` are held and reported together.
 pub struct PeakHits {
     prev: [f32; 11],
-    acc: [f32; 11],
+    /// Each column's recent rises as (time, size), the push now being summed.
+    rises: [Vec<(f64, f32)>; 11],
+    /// Time since the cap last rose, and when the push now being summed began.
+    quiet: [f32; 11],
+    since: [f64; 11],
     last: [f64; 11],
 }
 
-/// How far a cap must have risen (of the full scale) for a burst, and the shortest gap between bursts.
-const PEAK_HIT_MIN: f32 = 0.03;
+/// How far a cap must have risen (of the full scale) for a burst: five LED segments.
+pub const PEAK_HIT_MIN: f32 = 5.0 / LED_SEGMENTS;
+/// The shortest gap between bursts of one column, and how long a rise counts toward a push.
 const PEAK_HIT_GAP: f64 = 0.12;
-const PEAK_HIT_MEMORY_S: f32 = 0.5;
+const PEAK_HIT_WINDOW_S: f64 = 0.25;
+/// A push is over when the cap has not risen for this long (a frame between two analysis hops may see no
+/// change), and is reported anyway once it has lasted `PEAK_HIT_MAX_WAIT`, so a long climb is not held back.
+const PEAK_HIT_SETTLE_S: f32 = 0.025;
+const PEAK_HIT_MAX_WAIT: f64 = 0.08;
 
 impl PeakHits {
     pub fn new() -> PeakHits {
-        PeakHits { prev: [0.0; 11], acc: [0.0; 11], last: [f64::NEG_INFINITY; 11] }
+        PeakHits {
+            prev: [0.0; 11],
+            rises: std::array::from_fn(|_| Vec::new()),
+            quiet: [1.0; 11],
+            since: [f64::NEG_INFINITY; 11],
+            last: [f64::NEG_INFINITY; 11],
+        }
     }
 
-    /// `peaks` are the caps' positions (0..1) this frame. Returns each column's burst strength, 0 for none.
+    /// `peaks` are the caps' positions (0..1) this frame. Returns each column's burst strength (how far the
+    /// cap rose, as a share of the full scale), 0 for none.
     pub fn update(&mut self, peaks: &[f32; 11], now: f64, dt: f32) -> [f32; 11] {
         let mut out = [0.0; 11];
         for i in 0..11 {
             let rise = peaks[i] - self.prev[i];
             self.prev[i] = peaks[i];
             if rise > 0.0 {
-                self.acc[i] += rise;
+                if self.quiet[i] >= PEAK_HIT_SETTLE_S {
+                    self.since[i] = now;
+                }
+                self.rises[i].push((now, rise));
+                self.quiet[i] = 0.0;
             } else {
-                self.acc[i] *= (-dt / PEAK_HIT_MEMORY_S).exp();
+                self.quiet[i] += dt;
             }
-            if self.acc[i] >= PEAK_HIT_MIN && now - self.last[i] >= PEAK_HIT_GAP {
-                out[i] = self.acc[i];
-                self.acc[i] = 0.0;
+            self.rises[i].retain(|(t, _)| now - t <= PEAK_HIT_WINDOW_S);
+            let push: f32 = self.rises[i].iter().map(|(_, r)| r).sum();
+            let over = self.quiet[i] >= PEAK_HIT_SETTLE_S || now - self.since[i] >= PEAK_HIT_MAX_WAIT;
+            if push >= PEAK_HIT_MIN && over && now - self.last[i] >= PEAK_HIT_GAP {
+                out[i] = push;
+                self.rises[i].clear();
                 self.last[i] = now;
             }
         }
@@ -255,44 +284,81 @@ mod tests {
         assert_eq!(s.rings[0][1], 0.0);
     }
 
-    #[test]
-    fn peak_bursts_need_a_real_push_and_are_rate_limited() {
-        let mut ph = PeakHits::new();
-        let mut caps = [0.0f32; 11];
+    /// Feeds one frame per entry of `rises` (in LED segments) to column 3, then `quiet` frames with no
+    /// change, and returns each burst as (frame, segments).
+    fn bursts_for(ph: &mut PeakHits, caps: &mut [f32; 11], t: &mut f64, rises: &[f32], quiet: usize) -> Vec<(usize, f32)> {
         let dt = 1.0 / 60.0;
-        let mut t = 0.0;
-        // a cap that creeps up a hair (1.5% of the scale in half a second) is no event
-        let mut bursts = 0;
-        for _ in 0..30 {
-            caps[3] += 0.0005;
-            t += dt as f64;
-            bursts += (ph.update(&caps, t, dt)[3] > 0.0) as u32;
+        let mut out = Vec::new();
+        for (k, r) in rises.iter().cloned().chain(std::iter::repeat(0.0).take(quiet)).enumerate() {
+            caps[3] += r / LED_SEGMENTS;
+            *t += dt as f64;
+            let h = ph.update(caps, *t, dt)[3];
+            if h > 0.0 {
+                out.push((k, h * LED_SEGMENTS));
+            }
         }
-        assert_eq!(bursts, 0, "bursts from a slow creep");
-        // ...but a steady climb of 6% in that time is a push, reported in pieces no faster than the rate limit
-        let mut ph2 = PeakHits::new();
-        let mut caps2 = [0.0f32; 11];
-        let mut n = 0;
-        for k in 0..30 {
-            caps2[3] += 0.002;
-            n += (ph2.update(&caps2, k as f64 * dt as f64, dt)[3] > 0.0) as u32;
-        }
-        assert_eq!(n, 2, "a 6% climb gives two bursts of 3%");
-        // a clear push is one burst, and its strength is how far the cap rose
+        out
+    }
+
+    #[test]
+    fn peak_bursts_need_a_push_of_five_segments_and_are_sized_by_it() {
+        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
+        // four segments in one frame is no event, five is
+        assert!(bursts_for(&mut ph, &mut caps, &mut t, &[4.0], 30).is_empty(), "a four-segment push threw sparks");
+        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
+        let b = bursts_for(&mut ph, &mut caps, &mut t, &[5.01], 30);
+        assert_eq!(b.len(), 1, "a five-segment push is one burst");
+        assert!((b[0].1 - 5.01).abs() < 0.01, "its strength is the push");
+        // a hit whose cap climbs over four frames is one burst of the whole climb, after it has settled
+        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
+        let b = bursts_for(&mut ph, &mut caps, &mut t, &[3.3, 3.8, 1.1, 1.0], 30);
+        assert_eq!(b.len(), 1, "one hit, one burst: {b:?}");
+        assert!((b[0].1 - 9.2).abs() < 0.01, "got {b:?}");
+        assert!(b[0].0 <= 8, "reported within a few frames of the climb ending: {b:?}");
+        // a bigger push is a bigger burst
+        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
+        let big = bursts_for(&mut ph, &mut caps, &mut t, &[14.0], 30);
+        assert!(big[0].1 > b[0].1);
+        // and only the column that rose reports
         let mut ph = PeakHits::new();
         let mut caps = [0.0f32; 11];
         caps[5] = 0.4;
-        let out = ph.update(&caps, 1.0, dt);
-        assert!((out[5] - 0.4).abs() < 1e-6 && out[4] == 0.0);
-        // a second push right after is held back by the rate limit, then reported with both rises
-        caps[5] = 0.5;
-        assert_eq!(ph.update(&caps, 1.03, dt)[5], 0.0);
-        caps[5] = 0.55;
-        let later = ph.update(&caps, 1.15, dt)[5];
-        assert!((later - 0.15).abs() < 1e-6, "got {later}");
+        let dt = 1.0 / 60.0;
+        assert!(ph.update(&caps, 1.0, dt).iter().all(|v| *v == 0.0), "reported before the push settled");
+        let settled = [1.0 + 1.0 * dt as f64, 1.0 + 2.0 * dt as f64].map(|now| ph.update(&caps, now, dt));
+        assert!((settled[1][5] - 0.4).abs() < 1e-6 && settled[1][4] == 0.0, "{settled:?}");
+    }
+
+    #[test]
+    fn slow_climbs_and_falling_caps_throw_nothing() {
+        // a cap that creeps up a hair a frame is no event
+        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
+        assert!(bursts_for(&mut ph, &mut caps, &mut t, &[0.05; 120], 30).is_empty(), "bursts from a slow creep");
+        // a staircase of one segment every tenth of a second (3 segments a second) never adds up
+        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
+        let stairs: Vec<f32> = (0..300).map(|k| if k % 6 == 0 { 1.0 } else { 0.0 }).collect();
+        assert!(bursts_for(&mut ph, &mut caps, &mut t, &stairs, 30).is_empty(), "bursts from a staircase");
         // a falling cap is no event
+        let mut ph = PeakHits::new();
+        let mut caps = [0.0f32; 11];
+        caps[5] = 0.8;
+        ph.update(&caps, 1.0, 1.0 / 60.0);
         caps[5] = 0.3;
-        assert_eq!(ph.update(&caps, 2.0, dt)[5], 0.0);
+        assert_eq!(ph.update(&caps, 2.0, 1.0 / 60.0)[5], 0.0);
+    }
+
+    #[test]
+    fn a_long_climb_is_reported_without_waiting_for_it_to_end_and_bursts_are_rate_limited() {
+        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
+        // two segments every frame for a second: reported while it climbs, no faster than the rate limit
+        let b = bursts_for(&mut ph, &mut caps, &mut t, &[2.0; 60], 0);
+        assert!(b.len() >= 5 && b.len() <= 9, "got {b:?}");
+        assert!(b.windows(2).all(|w| (w[1].0 - w[0].0) as f64 / 60.0 >= PEAK_HIT_GAP - 1e-6), "{b:?}");
+        // a second push right after a burst is held back by the rate limit, then reported
+        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
+        let b = bursts_for(&mut ph, &mut caps, &mut t, &[8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0], 30);
+        assert_eq!(b.len(), 2, "{b:?}");
+        assert!((b[1].0 - b[0].0) as f64 / 60.0 >= PEAK_HIT_GAP - 1e-6, "{b:?}");
     }
 
     #[test]
