@@ -95,6 +95,191 @@ impl RiseNorm {
     }
 }
 
+/// A drum-like event found in the rise: where along the emitter line it landed (0 bass .. 1 treble) and how
+/// hard it was, 0 at the lightest hit worth reporting and 1 at the fountain's full strength.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hit {
+    pub pos: f32,
+    pub strength: f32,
+}
+
+/// The lightest hit that is reported, as a strength (0 is the fountain's own threshold, `SPARK_START`).
+const HIT_MIN: f32 = 0.18;
+/// Peaks closer than this (in bins, of 192) are one hit; farther apart they are two only when the rise
+/// between them dips below `HIT_VALLEY` of the lower peak, so a snare's broad plateau stays one hit while a
+/// kick and a snare landing together are two. Beyond `HIT_FAR` bins they are always two.
+const HIT_NEAR: usize = 10;
+const HIT_FAR: usize = 60;
+const HIT_VALLEY: f32 = 0.7;
+/// A hit is reported once its rise has stopped climbing (it reaches its height within about two analysis hops,
+/// so the first frame over the threshold understates it), or at the latest after this long.
+const HIT_SETTLE_S: f64 = 0.015;
+/// One hit per position per this long, where a position is `HIT_NEAR_POS` of the line either side.
+const HIT_REFRACTORY_S: f64 = 0.12;
+const HIT_NEAR_POS: f32 = 0.12;
+/// Dense music is thinned to its hardest hits: every hit reported in the last `HIT_BUDGET_S` raises the
+/// strength the next one needs by `HIT_RAISE`.
+const HIT_BUDGET_S: f64 = 1.0;
+const HIT_RAISE: f32 = 0.12;
+/// One event is at most this many hits: a snare is broadband, with a body, a noisy middle and a crack, and
+/// every part clears the threshold, but it is one event. Hits that start within `HIT_EVENT_S` of each other
+/// count as one event, and only its two strongest parts are reported (a kick and a snare landing together
+/// are still a pair).
+const HIT_EVENT_MAX: usize = 2;
+const HIT_EVENT_S: f64 = 0.06;
+/// A hit has to stand out from what its frequency is already doing: each bin's rise is judged after taking off
+/// `HIT_BG_K` times its own slow average (time constant `HIT_BG_TAU_S`). A sustained chord whose close partials
+/// beat inside the 21 ms analysis window makes the rise jitter all the time, at the very frequencies of the
+/// chord, and without this it detonated about twice a second; a drum rises far above its own background.
+const HIT_BG_K: f32 = 2.0;
+const HIT_BG_TAU_S: f32 = 0.6;
+
+struct PendingHit {
+    pos: f32,
+    best: f32,
+    since: f64,
+}
+
+/// Finds hits in the normalized, tilted rise of the 192 bins (see `RiseNorm`): a peak along the bins that
+/// clears the fountain's threshold is one hit, reported once it has peaked and then held off for a refractory
+/// time at its position. Strength is measured above the fountain's threshold (`SPARK_START` to `SPARK_FULL`
+/// at the sensitivity), so the Sensitivity setting means the same thing here as it does there. Fireworks
+/// detonates a shell on each hit; a scene of lightning strikes would take the same events.
+pub struct RiseHits {
+    pending: Vec<PendingHit>,
+    /// Hits found lately as (position, time, whether it was reported), for the refractory time (which a hit the
+    /// budget turned away also starts, so its decaying tail is not mistaken for a new one) and the budget.
+    recent: Vec<(f32, f64, bool)>,
+    /// When the pending hits of the current event began.
+    starts: Vec<f64>,
+    /// Each bin's slow average rise, and when it was last updated.
+    background: Vec<f32>,
+    last: Option<f64>,
+    /// The lightest hit reported and the background factor (the constants, unless a test sweeps them).
+    min_strength: f32,
+    bg_k: f32,
+}
+
+impl RiseHits {
+    pub fn new() -> RiseHits {
+        RiseHits { pending: Vec::new(), recent: Vec::new(), starts: Vec::new(), background: Vec::new(), last: None, min_strength: HIT_MIN, bg_k: HIT_BG_K }
+    }
+
+    pub fn reset(&mut self) {
+        *self = RiseHits::new();
+    }
+
+    /// The peaks of `strength` per bin (0..2, see `update`) that clear `HIT_MIN`, strongest first, as (position, height).
+    fn peaks<const N: usize>(strength: &[f32; N], min: f32) -> Vec<(f32, f32)> {
+        let mut found: Vec<(usize, f32)> = Vec::new();
+        for i in 0..N {
+            let v = strength[i];
+            let left = if i > 0 { strength[i - 1] } else { 0.0 };
+            let right = if i + 1 < N { strength[i + 1] } else { 0.0 };
+            if v >= min && v >= left && v > right {
+                found.push((i, v));
+            }
+        }
+        found.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        let mut kept: Vec<(usize, f32)> = Vec::new();
+        for (i, v) in found {
+            let merged = kept.iter().any(|(j, _)| {
+                let d = i.abs_diff(*j);
+                if d <= HIT_NEAR {
+                    return true;
+                }
+                if d >= HIT_FAR {
+                    return false;
+                }
+                let (lo, hi) = (i.min(*j), i.max(*j));
+                let valley = strength[lo..=hi].iter().cloned().fold(f32::MAX, f32::min);
+                valley >= HIT_VALLEY * v
+            });
+            if !merged {
+                kept.push((i, v));
+            }
+        }
+        // the position is the centre of mass of the peak's shoulders, so a plateau reads in its middle
+        kept.iter()
+            .map(|(i, v)| {
+                let (lo, hi) = (i.saturating_sub(3), (i + 3).min(N - 1));
+                let (mut w, mut m) = (0.0f32, 0.0f32);
+                for k in lo..=hi {
+                    let s = strength[k].max(0.0);
+                    w += s;
+                    m += s * k as f32;
+                }
+                (m / w.max(1e-6) / (N - 1) as f32, *v)
+            })
+            .collect()
+    }
+
+    /// `rise` is `RiseNorm::update`'s output for this frame, `sens` the fountain's sensitivity, `gate_open`
+    /// whether the music is loud enough to count. Returns the hits reported now.
+    pub fn update<const N: usize>(&mut self, rise: &[f32; N], sens: f32, now: f64, gate_open: bool) -> Vec<Hit> {
+        self.recent.retain(|(_, t, _)| now - t < HIT_BUDGET_S);
+        self.starts.retain(|t| now - t < HIT_EVENT_S);
+        let span = (SPARK_FULL - SPARK_START).max(1e-3);
+        if self.background.len() != N {
+            self.background = vec![0.0; N];
+        }
+        let dt = self.last.map_or(0.0, |t| (now - t).clamp(0.0, 0.1)) as f32;
+        self.last = Some(now);
+        let follow = 1.0 - (-dt / HIT_BG_TAU_S).exp();
+        let mut strength = [0.0f32; N];
+        for ((s, r), bg) in strength.iter_mut().zip(rise).zip(self.background.iter_mut()) {
+            // the contrast is taken before the average moves, so a hit does not count against itself
+            let contrast = (r - self.bg_k * *bg).max(0.0);
+            *bg += (r - *bg) * follow;
+            if gate_open {
+                // above 1 the strength is only tracked, so a hit still climbing past full is seen to be climbing
+                *s = ((contrast * sens - SPARK_START) / span).clamp(0.0, 2.0);
+            }
+        }
+        let peaks = Self::peaks(&strength, self.min_strength);
+        let held = |recent: &[(f32, f64, bool)], pos: f32| recent.iter().any(|(p, t, _)| now - t < HIT_REFRACTORY_S && (p - pos).abs() < HIT_NEAR_POS);
+
+        let mut out = Vec::new();
+        let mut matched = vec![false; peaks.len()];
+        let mut still = Vec::new();
+        for mut pend in std::mem::take(&mut self.pending) {
+            let at = peaks.iter().position(|(p, _)| (p - pend.pos).abs() < HIT_NEAR_POS);
+            let mut done = at.is_none() || now - pend.since >= HIT_SETTLE_S;
+            if let Some(k) = at {
+                matched[k] = true;
+                let v = peaks[k].1;
+                if v > pend.best {
+                    pend.best = v;
+                    pend.pos = peaks[k].0;
+                } else if v < pend.best - 0.04 {
+                    done = true; // it has peaked and is falling
+                }
+            }
+            if !done {
+                still.push(pend);
+                continue;
+            }
+            let reported = self.recent.iter().filter(|r| r.2).count();
+            let needed = self.min_strength + HIT_RAISE * reported as f32;
+            if !held(&self.recent, pend.pos) {
+                let ok = pend.best >= needed;
+                self.recent.push((pend.pos, now, ok));
+                if ok {
+                    out.push(Hit { pos: pend.pos, strength: pend.best.min(1.0) });
+                }
+            }
+        }
+        for (k, (pos, v)) in peaks.iter().enumerate() {
+            if !matched[k] && self.starts.len() < HIT_EVENT_MAX && !held(&self.recent, *pos) && !still.iter().any(|p| (p.pos - pos).abs() < HIT_NEAR_POS) {
+                still.push(PendingHit { pos: *pos, best: *v, since: now });
+                self.starts.push(now);
+            }
+        }
+        self.pending = still;
+        out
+    }
+}
+
 /// The LED strip of a 3D column has this many segments (`columns.wgsl`: `COL_MAX_H / SEG`), so a peak cap's
 /// position is counted in them.
 pub const LED_SEGMENTS: f32 = 30.0;
@@ -403,6 +588,267 @@ mod tests {
             n.update(&[0.2f32; 192], dt);
         }
         assert!((n.reference - REF_MIN).abs() < 0.05, "reference stuck at {}", n.reference);
+    }
+
+    // ---- RiseHits: one peak along the bins is one hit
+
+    /// A normalized rise with a triangular bump of `height` centred on bin `at`, `half` bins to a side.
+    fn bump(at: usize, half: usize, height: f32) -> [f32; 192] {
+        let mut r = [0.0f32; 192];
+        for k in at.saturating_sub(half)..=(at + half).min(191) {
+            r[k] = height * (1.0 - 0.6 * (k.abs_diff(at) as f32 / (half + 1) as f32));
+        }
+        r
+    }
+
+    fn add(a: &[f32; 192], b: &[f32; 192]) -> [f32; 192] {
+        std::array::from_fn(|i| a[i].max(b[i]))
+    }
+
+    /// Feeds `frames` at 120 Hz starting at `t0`, followed by `quiet` empty frames, and returns each hit with
+    /// the frame it was reported in.
+    fn hits_for(rh: &mut RiseHits, frames: &[[f32; 192]], t0: f64, sens: f32, quiet: usize) -> Vec<(usize, Hit)> {
+        let mut out = Vec::new();
+        for (k, f) in frames.iter().chain(std::iter::repeat(&[0.0f32; 192]).take(quiet)).enumerate() {
+            for h in rh.update(f, sens, t0 + k as f64 * DT120, true) {
+                out.push((k, h));
+            }
+        }
+        out
+    }
+
+    const DT120: f64 = 1.0 / 120.0;
+
+    /// A hit's rise decaying with the analyzer's 50 ms time constant, from `peak` at its first frame.
+    fn decaying(at: usize, half: usize, peak: f32, frames: usize) -> Vec<[f32; 192]> {
+        (0..frames).map(|k| bump(at, half, peak * (-(k as f64 * DT120) / 0.05).exp() as f32)).collect()
+    }
+
+    #[test]
+    fn a_hit_is_reported_once_at_its_place_and_strength_within_a_frame_or_two() {
+        // a kick in the lows that climbs over three frames, then dies away: one hit, at the height it reached
+        let mut f = vec![bump(10, 6, 0.55), bump(10, 6, 0.9)];
+        f.extend(decaying(10, 6, 1.1, 30));
+        let hits = hits_for(&mut RiseHits::new(), &f, 5.0, 1.0, 120);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        let (frame, h) = hits[0];
+        assert!(frame <= 2, "reported {frame} frames after the rise crossed the threshold");
+        assert!((h.pos - 10.0 / 191.0).abs() < 0.03, "{h:?}");
+        assert!(h.strength > 0.95, "measured the first frame, not the peak: {h:?}");
+    }
+
+    #[test]
+    fn a_kick_and_a_snare_together_are_two_hits_and_a_broad_snare_is_one() {
+        let mut snare = bump(150, 28, 0.9);
+        for (i, v) in snare.iter_mut().enumerate() {
+            *v *= 0.85 + 0.15 * ((i * 7 % 5) as f32 / 4.0); // the jitter of a noise-like plateau
+        }
+        let both = add(&bump(10, 6, 1.1), &snare);
+        let hits = hits_for(&mut RiseHits::new(), &[both; 3], 1.0, 1.0, 60);
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        assert!(hits.iter().any(|(_, h)| h.pos < 0.1) && hits.iter().any(|(_, h)| h.pos > 0.6), "{hits:?}");
+        let hits = hits_for(&mut RiseHits::new(), &[snare; 3], 1.0, 1.0, 60);
+        assert_eq!(hits.len(), 1, "one hit for one plateau: {hits:?}");
+        assert!(hits[0].1.pos > 0.6 && hits[0].1.pos < 0.95, "{hits:?}");
+    }
+
+    #[test]
+    fn a_decaying_tail_is_no_second_hit_but_the_next_beat_is() {
+        let mut f = decaying(10, 6, 1.1, 24); // 200 ms
+        f.extend(std::iter::repeat([0.0f32; 192]).take(36));
+        f.extend(decaying(10, 6, 1.1, 24)); // the next hit at 500 ms
+        let hits = hits_for(&mut RiseHits::new(), &f, 2.0, 1.0, 60);
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        assert!(((hits[1].0 - hits[0].0) as f64 * DT120 - 0.5).abs() < 0.03, "{hits:?}");
+        // two hits at different places inside the refractory time are both reported
+        let two = add(&bump(10, 6, 1.1), &bump(120, 6, 1.1));
+        assert_eq!(hits_for(&mut RiseHits::new(), &[two; 3], 1.0, 1.0, 60).len(), 2);
+        // and the same place again 60 ms later is held off
+        let mut f = decaying(10, 6, 1.1, 7);
+        f.extend(decaying(10, 6, 1.1, 20));
+        assert_eq!(hits_for(&mut RiseHits::new(), &f, 1.0, 1.0, 60).len(), 1);
+    }
+
+    #[test]
+    fn sensitivity_moves_the_threshold_and_scales_the_strength() {
+        let f = vec![bump(60, 6, 0.55); 6]; // a moderate hit: 0.6 of the hardest at the peak of its bump
+        let lo = hits_for(&mut RiseHits::new(), &f, 1.0, 0.5, 60);
+        let mid = hits_for(&mut RiseHits::new(), &f, 1.0, 1.0, 60);
+        let hi = hits_for(&mut RiseHits::new(), &f, 1.0, 2.0, 60);
+        assert!(lo.is_empty(), "below the threshold at low sensitivity: {lo:?}");
+        assert_eq!(mid.len(), 1, "{mid:?}");
+        assert_eq!(hi.len(), 1, "{hi:?}");
+        assert!(hi[0].1.strength > mid[0].1.strength + 0.2, "{mid:?} vs {hi:?}");
+    }
+
+    #[test]
+    fn a_closed_gate_reports_nothing_and_dense_music_is_thinned_to_its_hardest_hits() {
+        let mut rh = RiseHits::new();
+        assert!((0..60).all(|k| rh.update(&bump(10, 6, 1.1), 1.0, k as f64 * DT120, false).is_empty()));
+        // a hit every 125 ms at a new place each time: a storm. The weak ones thin out, the hard ones come through.
+        let mut rh = RiseHits::new();
+        let (mut weak, mut hard) = (0, 0);
+        for beat in 0..32 {
+            let at = 20 + (beat * 37) % 150;
+            let hard_one = beat % 4 == 0;
+            let h = if hard_one { 1.1 } else { 0.5 };
+            let t0 = 3.0 + beat as f64 * 0.125;
+            let frames: Vec<[f32; 192]> = (0..15).map(|k| bump(at, 5, h * (-(k as f64 * DT120) / 0.05).exp() as f32)).collect();
+            let n = hits_for(&mut rh, &frames, t0, 1.0, 0).len();
+            if hard_one { hard += n } else { weak += n }
+        }
+        assert!(hard >= 6, "the hard hits ({hard}) must come through");
+        assert!(weak <= hard + 4, "weak hits ({weak}) should be thinned against hard ({hard})");
+        assert!(hard + weak < 30, "a storm of 32 beats reported {}", hard + weak);
+    }
+
+    /// Hits found by the real analyzer, the rise normalization and the detector on the percussion fixture, whose
+    /// kicks (t = 0 mod 3, 100 Hz) and snares (1.5 mod 3, broadband) are exact: one hit per event, kicks at the
+    /// left of the line and snares reaching the right, reported within a few frames of the event.
+    fn fixture_hits(fx: crate::synth::Fixture, secs: f64, sens: f32) -> Vec<(f64, Hit)> {
+        fixture_hits_with(fx, secs, sens, RiseHits::new())
+    }
+
+    fn fixture_hits_with(fx: crate::synth::Fixture, secs: f64, sens: f32, mut rh: RiseHits) -> Vec<(f64, Hit)> {
+        use crate::analyzer::{Dsp, CURVE_POINTS};
+        use crate::synth::Synth;
+        let mut synth = Synth::new(fx);
+        let mut dsp = Dsp::new();
+        let mut norm = RiseNorm::new();
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        let mut rise = [0.0f32; CURVE_POINTS];
+        let mut out = Vec::new();
+        let frames = (secs * 120.0) as usize;
+        for k in 0..frames {
+            l.clear();
+            r.clear();
+            synth.render(400, &mut l, &mut r);
+            let now = (k + 1) as f64 / 120.0;
+            if let (Some(lv), _) = dsp.push(&l, &r, now) {
+                rise = lv.rise;
+            }
+            let n = norm.update(&rise, 1.0 / 120.0);
+            for h in rh.update(&n, sens, now, true) {
+                out.push((now, h));
+            }
+        }
+        out
+    }
+
+    /// How many hits the detector finds per second on the synthetic songs, and where along the line: for judging
+    /// density. `cargo test --release dump_hits -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_hits() {
+        use crate::synth::Fixture;
+        for (fx, secs) in [(Fixture::Percussion, 31.0), (Fixture::Demo, 64.0), (Fixture::Dense, 32.0)] {
+            for sens in [0.6f32, 1.0, 1.8] {
+                let hits: Vec<_> = fixture_hits(fx, secs, sens).into_iter().filter(|h| h.0 > 6.0).collect();
+                let span = secs - 6.0;
+                let mut third = [0; 3];
+                for h in &hits {
+                    third[((h.1.pos * 3.0) as usize).min(2)] += 1;
+                }
+                let mean = hits.iter().map(|h| h.1.strength).sum::<f32>() / hits.len().max(1) as f32;
+                eprintln!("{fx:?} sens {sens}: {:.2} hits/s (low {} mid {} high {}), mean strength {mean:.2}", hits.len() as f64 / span, third[0], third[1], third[2]);
+            }
+        }
+    }
+
+    /// Sweeps the minimum strength and the background factor: hits a second after the start on sustained tones (which
+    /// should fire nothing), a sweep, and the musical fixtures at sensitivities 1 and 1.8.
+    #[test]
+    #[ignore]
+    fn dump_hit_tuning() {
+        use crate::synth::Fixture;
+        for (min, k) in [(0.18f32, 1.0f32), (0.18, 1.5), (0.18, 2.0), (0.30, 1.0), (0.30, 1.5), (0.30, 2.0), (0.45, 1.0), (0.45, 1.5), (0.45, 2.0)] {
+            let run = |fx: Fixture, secs: f64, sens: f32| {
+                let mut rh = RiseHits::new();
+                rh.min_strength = min;
+                rh.bg_k = k;
+                let n = fixture_hits_with(fx, secs, sens, rh).iter().filter(|h| h.0 > 4.0).count();
+                n as f64 / (secs - 4.0)
+            };
+            eprintln!(
+                "min {min:.2} k {k:.1}: tones {:.2}/s sweep {:.2}/s | perc {:.2} demo {:.2} dense {:.2} /s at sens 1 | perc {:.2} demo {:.2} dense {:.2} /s at sens 1.8",
+                run(Fixture::Tones, 40.0, 1.0), run(Fixture::Sweep, 40.0, 1.0),
+                run(Fixture::Percussion, 40.0, 1.0), run(Fixture::Demo, 64.0, 1.0), run(Fixture::Dense, 32.0, 1.0),
+                run(Fixture::Percussion, 40.0, 1.8), run(Fixture::Demo, 64.0, 1.8), run(Fixture::Dense, 32.0, 1.8),
+            );
+        }
+    }
+
+    /// The hits around each drum of the percussion fixture, for judging how many a snare is.
+    #[test]
+    #[ignore]
+    fn dump_percussion_events() {
+        let hits = fixture_hits(crate::synth::Fixture::Percussion, 31.0, 1.0);
+        for k in 2..10 {
+            for (t, name) in [(3.0 * k as f64, "kick "), (3.0 * k as f64 + 1.5, "snare")] {
+                let found: Vec<String> = hits.iter().filter(|h| h.0 >= t && h.0 < t + 0.3).map(|h| format!("+{:.0}ms pos {:.2} str {:.2}", (h.0 - t) * 1000.0, h.1.pos, h.1.strength)).collect();
+                eprintln!("{name} {t:5.1}: {}", found.join(" | "));
+            }
+        }
+    }
+
+    #[test]
+    fn a_hit_must_stand_out_from_its_own_background() {
+        // a frequency that jitters between 0.2 and 0.7 all the time (a beating chord) is no hit...
+        let mut rh = RiseHits::new();
+        let mut n = 0;
+        for k in 0..(10 * 120) {
+            let h = 0.2 + 0.5 * (((k * 7919) % 13) as f32 / 12.0);
+            n += rh.update(&bump(60, 6, h), 1.0, 2.0 + k as f64 * DT120, true).len();
+        }
+        assert!(n <= 1, "{n} hits from a jittering background");
+        // ...but a drum on top of it still is
+        let mut hits = 0;
+        for k in 0..(4 * 120) {
+            let drum = if (k % 60) < 3 { 1.2 } else { 0.0 };
+            let jitter = 0.2 + 0.3 * (((k * 7919) % 13) as f32 / 12.0);
+            let f = add(&bump(60, 6, jitter), &bump(8, 6, drum));
+            hits += rh.update(&f, 1.0, 20.0 + k as f64 * DT120, true).iter().filter(|h| h.pos < 0.1).count();
+        }
+        assert!(hits >= 6, "{hits} of 8 drums over a jittering background");
+    }
+
+    #[test]
+    fn sustained_tones_and_sweeps_detonate_nothing() {
+        use crate::synth::Fixture;
+        for fx in [Fixture::Tones, Fixture::Sweep] {
+            let hits = fixture_hits(fx, 24.0, 1.0);
+            let after: Vec<_> = hits.iter().filter(|h| h.0 > 4.0).collect();
+            // a sweep passes each frequency once, a couple of times in its period; steady tones fire nothing
+            let allowed = if fx == Fixture::Tones { 1 } else { 8 };
+            assert!(after.len() <= allowed, "{fx:?}: {} hits after the start: {after:?}", after.len());
+        }
+    }
+
+    #[test]
+    fn the_percussion_fixture_gives_one_hit_per_drum_in_the_right_place() {
+        let hits = fixture_hits(crate::synth::Fixture::Percussion, 31.0, 1.0);
+        // events: kicks at 3k, snares at 3k + 1.5. Skip the first 6 s while the reference settles.
+        let near = |h: &(f64, Hit), t: f64| h.0 >= t && h.0 < t + 0.12;
+        let mut missed = Vec::new();
+        for k in 2..10 {
+            for (t, name, left) in [(3.0 * k as f64, "kick", true), (3.0 * k as f64 + 1.5, "snare", false)] {
+                let found: Vec<_> = hits.iter().filter(|h| near(h, t)).collect();
+                if found.is_empty() {
+                    missed.push(format!("{name} at {t}"));
+                    continue;
+                }
+                if left {
+                    assert!(found.len() == 1 && found[0].1.pos < 0.3, "a kick is one hit on the left: {found:?}");
+                } else {
+                    // a snare is broadband: its body lands with the kicks and its crack on the right, never more
+                    assert!(found.len() <= HIT_EVENT_MAX && found.iter().any(|h| h.1.pos > 0.5), "a snare should reach the right: {found:?}");
+                }
+            }
+        }
+        assert!(missed.is_empty(), "missed events: {missed:?}\nall hits: {hits:?}");
+        // and nothing between the drums beyond a couple of tails
+        let stray = hits.iter().filter(|h| h.0 > 6.0 && (0..10).all(|k| !near(h, 3.0 * k as f64) && !near(h, 3.0 * k as f64 + 1.5))).count();
+        assert!(stray <= 2, "{stray} hits fell between the drums: {hits:?}");
     }
 
     #[test]

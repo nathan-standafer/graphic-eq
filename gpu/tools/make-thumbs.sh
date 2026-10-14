@@ -4,8 +4,6 @@
 #   tools/make-thumbs.sh
 set -e
 cd "$(dirname "$0")/.."
-# the aurora needs a few seconds for its curtains to answer the groove
-shot 8 0 8-boreal-green 13.6;  shot 8 1 8-polar-ice 13.6;      shot 8 2 8-neon-veil 13.6;  shot 8 3 8-prism-curtains 13.6
 cargo build --release
 bin=target/release/geq-gpu
 shot() { # scene preset name seconds
@@ -26,4 +24,6 @@ shot 6 0 6-moonlit-sand 14;    shot 6 1 6-amber-dust 14;       shot 6 2 6-neon-g
 shot 7 0 7-obsidian-ice 13.6;  shot 7 1 7-ember-core 13.6;     shot 7 2 7-neon-magnet 13.6; shot 7 3 7-prism-oil 13.6
 # the aurora needs a few seconds for its curtains to answer the groove
 shot 8 0 8-boreal-green 13.6;  shot 8 1 8-polar-ice 13.6;      shot 8 2 8-neon-veil 13.6;  shot 8 3 8-prism-curtains 13.6
+# the fireworks: at 19.9 s a willow, a peony and a crackle are up together, with sky around them
+shot 9 0 9-gold-willow 19.9;   shot 9 1 9-ice-chrysanthemum 19.9; shot 9 2 9-neon-peony 19.9; shot 9 3 9-prism-finale 19.9
 cargo build --release

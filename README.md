@@ -113,6 +113,22 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   2-6); **Motion** is how much the curtains fold and drift and how the lake stirs (0 holds the folds still; the
   columns still follow the music), **Flash** is the highlights that run up the rays.
 
+- **Fireworks** - rockets climb a dark sky while the music is loud, and a hit sets one off. Sustained energy
+  launches rockets from pads along a line (bass left, treble right, scattered in depth); a hit found in the
+  volume's rise (the same detector as the Fountain, judged against the music's own hardest hits) detonates the
+  rocket nearest its place on the line, at once and at the height it has reached, and with none near a mortar pops
+  low, so a hit is never unanswered. A rocket nobody sets off bursts at its apex, small and dim. Where the hit lands
+  sets the kind of burst: lows throw a **willow** (big, slow, heavy trails that droop to the floor), mids a
+  **peony** (an even sphere), highs a **crackle** (small, fast, twinkling). A harder hit is bigger, brighter and
+  throws more stars, and every star takes its colour from a frequency of the spectrum at the moment of
+  detonation, so a bassy hit throws warm stars and a bright one cool ones. The stars hang for three or four seconds,
+  cool toward ember orange and fall onto a glass floor that mirrors them and takes a pool of light under every
+  live burst. The sky is never full: a hit beyond seven live bursts is dropped and stars thin out as more are
+  alive. Silence stops launches, rockets in the air fizzle out and the stars expire. Display menu: **sensitivity**
+  and **density** (as for the Fountain; density scales the stars in each burst); **Motion** is how far the stars
+  drift on the wind and how far the camera wanders, **Flash** is the detonation flash and the light the bursts throw
+  on the floor (0 leaves bare stars).
+
 **Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
 (your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip
 appears on mouse movement and fades after a few seconds. Display menu: looks, colors, **Motion**
@@ -135,7 +151,7 @@ audio: no EQ engine, no routing changes, settings are read-only.
 
 `GEQ_SHOT` with a synthetic source steps a simulated clock, so captures repeat exactly. Other hooks:
 `GEQ_PRESET`, `GEQ_THEME`, `GEQ_BLOOM`, `GEQ_MOTION`, `GEQ_FLASH`, `GEQ_STEREO`, `GEQ_ORBIT`,
-`GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor),
+`GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor), `GEQ_FWDEBUG=1` (one line per firework hit and burst: its time, kind, strength and where it came from),
 `GEQ_GRADIENT=n` (fountain spark sensitivity), `GEQ_DENSITY=n` (fountain particle density), `GEQ_SPARKS=0` (columns without sparks),
 `GEQ_SMOKE_ITERS=n` (pressure iterations of the smoke solver, default 18; it changes how tall the plumes stand),
 `GEQ_GRAINS=n` (how much sand lies on the Chladni plates, 0.25-1.5), `GEQ_SPIKES=n` (spike height of the ferrofluid orb, 0.3-1.5),

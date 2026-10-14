@@ -12,6 +12,7 @@ use std::collections::HashMap;
 pub mod aurora;
 pub mod columns;
 pub mod ferro;
+pub mod fireworks;
 pub mod fountain;
 pub mod particles;
 pub mod sand;
@@ -31,7 +32,8 @@ pub const SMOKE: u32 = 5;
 pub const CHLADNI: u32 = 6;
 pub const FERROFLUID: u32 = 7;
 pub const AURORA: u32 = 8;
-pub const ALL: [u32; 9] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE, CHLADNI, FERROFLUID, AURORA];
+pub const FIREWORKS: u32 = 9;
+pub const ALL: [u32; 10] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE, CHLADNI, FERROFLUID, AURORA, FIREWORKS];
 
 pub const DEPTH_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const MSAA: u32 = 4;
@@ -212,9 +214,9 @@ pub enum Control {
     ScopePersistence,
     /// Embers and sparks over the 3D columns.
     Sparks,
-    /// How many particles the fountain launches.
+    /// How many particles the fountain launches (and stars in a firework).
     Density,
-    /// How steeply the volume must rise to throw sparks.
+    /// How steeply the volume must rise to throw sparks (and to detonate a shell).
     Gradient,
     /// How thick the smoke jets blow.
     SmokeThickness,
@@ -236,7 +238,7 @@ pub struct SceneInfo {
     pub cost_ms: f32,
 }
 
-const INFOS: [SceneInfo; 9] = [
+const INFOS: [SceneInfo; 10] = [
     SceneInfo {
         id: COLUMNS,
         name: "3D columns",
@@ -303,6 +305,13 @@ const INFOS: [SceneInfo; 9] = [
         cam: CamLimits { yaw: 0.09, pitch: (-0.05, 0.05), zoom: (0.85, 1.2) },
         controls: &[Control::AuroraCurtains],
         cost_ms: 1.8,
+    },
+    SceneInfo {
+        id: FIREWORKS,
+        name: "Fireworks",
+        cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
+        controls: &[Control::Gradient, Control::Density],
+        cost_ms: 0.8,
     },
 ];
 
@@ -419,6 +428,7 @@ fn create(id: u32, ctx: &Ctx) -> Box<dyn Scene> {
         CHLADNI => Box::new(sand::Sand::new(ctx)),
         FERROFLUID => Box::new(ferro::Ferrofluid::new(ctx)),
         AURORA => Box::new(aurora::Aurora::new(ctx)),
+        FIREWORKS => Box::new(fireworks::Fireworks::new(ctx)),
         _ => Box::new(columns::Columns::new(ctx)),
     }
 }

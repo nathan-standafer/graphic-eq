@@ -2,7 +2,7 @@
 //! scene. They are separate from the EQ presets and never touch gains, bypass or routing.
 
 use crate::render::BLOOM_LEVELS;
-use crate::scenes::{AURORA, CHLADNI, COLUMNS, FERROFLUID, FOUNTAIN, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
+use crate::scenes::{AURORA, CHLADNI, COLUMNS, FERROFLUID, FIREWORKS, FOUNTAIN, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
 
 /// Idle camera path amplitudes at Motion = 1: yaw, pitch (radians), dolly (fraction), roll (radians).
 #[derive(Clone, Copy)]
@@ -46,7 +46,10 @@ const ORB_IDLE: Idle = Idle { yaw: 0.10, pitch: 0.025, zoom: 0.04, roll: 0.0 };
 /// The aurora is seen from a fixed spot at the water's edge: the idle path only sways the view a few degrees.
 const AURORA_IDLE: Idle = Idle { yaw: 0.03, pitch: 0.010, zoom: 0.02, roll: 0.0 };
 
-pub const LOOKS: [Look; 34] = [
+/// The fireworks are watched from a fixed spot low on the glass: the idle path sways the view a few degrees.
+const FIREWORKS_IDLE: Idle = Idle { yaw: 0.04, pitch: 0.012, zoom: 0.03, roll: 0.0 };
+
+pub const LOOKS: [Look; 38] = [
     // ---- columns
     Look {
         scene: COLUMNS, name: "Studio", theme: 0, exposure: 1.0,
@@ -231,6 +234,29 @@ pub const LOOKS: [Look; 34] = [
         scene: AURORA, name: "Prism Curtains", theme: 4, exposure: 0.9,
         bloom: [0.18, 0.24, 0.28, 0.24, 0.16, 0.10], threshold: 0.75, knee: 0.6, vignette: 0.5,
         motion: 0.6, flash: 0.7, idle: AURORA_IDLE,
+    },
+    // ---- fireworks: small bright stars want a tight halo, and the broad glow stays faint so the sky stays dark;
+    // only the detonation flashes may bloom hard (Motion is how far the stars drift on the wind and how far the
+    // camera wanders, Flash the detonation flashes and the light the bursts throw on the floor)
+    Look {
+        scene: FIREWORKS, name: "Gold Willow", theme: 1, exposure: 1.0,
+        bloom: [0.30, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.9, knee: 0.5, vignette: 0.6,
+        motion: 0.6, flash: 0.8, idle: FIREWORKS_IDLE,
+    },
+    Look {
+        scene: FIREWORKS, name: "Ice Chrysanthemum", theme: 2, exposure: 1.0,
+        bloom: [0.32, 0.36, 0.26, 0.16, 0.09, 0.05], threshold: 0.9, knee: 0.5, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: FIREWORKS_IDLE,
+    },
+    Look {
+        scene: FIREWORKS, name: "Neon Peony", theme: 3, exposure: 0.95,
+        bloom: [0.32, 0.38, 0.28, 0.16, 0.09, 0.05], threshold: 0.9, knee: 0.5, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: FIREWORKS_IDLE,
+    },
+    Look {
+        scene: FIREWORKS, name: "Prism Finale", theme: 4, exposure: 0.9,
+        bloom: [0.30, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.95, knee: 0.5, vignette: 0.5,
+        motion: 0.6, flash: 0.7, idle: FIREWORKS_IDLE,
     },
 ];
 

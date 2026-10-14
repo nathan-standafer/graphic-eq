@@ -27,10 +27,16 @@ fn sprite_dead() -> SpriteOut {
 // One corner of a particle's quad. `size` is the world radius; `mirror` reflects the particle in the
 // floor (y = 0) for the glass reflection.
 fn sprite_make(pos: vec3<f32>, vel: vec3<f32>, size: f32, vi: u32, col: vec3<f32>, mirror: bool) -> SpriteOut {
+  return sprite_make_trail(pos, vel, size, TRAIL_S, vi, col, mirror);
+}
+
+// The same with the streak's length in seconds of velocity chosen per particle (a willow's droop is several
+// times the default).
+fn sprite_make_trail(pos: vec3<f32>, vel: vec3<f32>, size: f32, trail_s: f32, vi: u32, col: vec3<f32>, mirror: bool) -> SpriteOut {
   // The streak trails behind the particle. One that has just bounced is moving up, so its tail would dip
   // below the glass: end the streak at the floor instead, so a spark leaves the surface rather than
   // appearing to pass through it. (Worked out on the real particle, so its reflection follows suit.)
-  var trail = TRAIL_S;
+  var trail = trail_s;
   if (vel.y > 1.0e-3) { trail = min(trail, max(pos.y, 0.0) / vel.y); }
   var wp = pos;
   var wv = vel;

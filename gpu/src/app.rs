@@ -1268,14 +1268,14 @@ impl App {
                         ui.label(RichText::new("SPARKS").small().weak());
                         touched |= ui
                             .add(egui::Slider::new(&mut self.cfg.spark_sensitivity, 0.4..=3.0).logarithmic(true).text("sensitivity"))
-                            .on_hover_text("How steeply the volume at a frequency must rise to throw sparks. Higher = more sparks.")
+                            .on_hover_text("How steeply the volume at a frequency must rise to throw sparks (or, in the fireworks, to set off a shell). Higher = more.")
                             .changed();
                     }
                     Control::Density => {
                         ui.label(RichText::new("PARTICLES").small().weak());
                         touched |= ui
                             .add(egui::Slider::new(&mut self.cfg.density, 0.25..=1.5).text("density"))
-                            .on_hover_text("How many particles the fountain launches")
+                            .on_hover_text("How many particles the fountain launches, or stars in each firework")
                             .changed();
                     }
                     Control::SmokeThickness => {
@@ -1329,6 +1329,8 @@ impl App {
                     "How hard a hit shakes the plates, and how far the lamp drifts over the sand. 0 gives a fixed lamp and sand that only follows the loudness."
                 } else if self.cfg.scene == scenes::AURORA {
                     "How much the curtains fold and drift, how the lake stirs, and how far the camera wanders. 0 holds the folds still (the columns still follow the music)."
+                } else if self.cfg.scene == scenes::FIREWORKS {
+                    "How far the stars drift on the wind and how far the camera wanders. 0 holds the sky still."
                 } else if self.cfg.scene == scenes::FERROFLUID {
                     "How elastic the fluid is: spikes thrown out by a hit, wobbling lobes, breathing, and how fast the lights drift around it. 0 gives a fluid that only follows the loudness, in still light."
                 } else {
@@ -1337,7 +1339,7 @@ impl App {
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.motion, 0.0..=1.5)).on_hover_text(motion_tip).changed();
                 ui.end_row();
                 ui.label("Flash");
-                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses (puffs from the smoke jets, the glow of sand on a hit, the lights and tip glow of the ferrofluid orb, the highlights that run up the aurora's rays). 0 turns them off.").changed();
+                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses (puffs from the smoke jets, the glow of sand on a hit, the lights and tip glow of the ferrofluid orb, the highlights that run up the aurora's rays, the flash of a firework and the light it throws on the floor). 0 turns them off.").changed();
                 ui.end_row();
                 ui.label("Glow");
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.bloom, 0.0..=2.0)).changed();

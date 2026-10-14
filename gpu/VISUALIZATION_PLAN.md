@@ -479,7 +479,7 @@ Needs F2b/F2f and F5 render scale. Additional layers are a measured quality opti
 
 ### 10. Fireworks — M
 
-*Proposed 2026-10-13, not built. It would take ID 9.*
+*Built, ID 9: see Milestone 8 for what shipped, what was measured and where it differs from this brief. The text below is the original brief.*
 
 Shells climb the dark sky while the music is loud, and a hit detonates one. The sparks hang, droop and fall onto
 the glass floor, which lights up beneath them and mirrors them. It keeps what makes the Fountain work (rare,
@@ -651,7 +651,7 @@ record of the spectrum. Bass hits drop heavy and make wide, slow rings; treble m
 6. **Particles and optional show features.** F4, sparse Sparks on the improved columns, then Fountain
    and Chladni. Add auto-cycle and optional F2g beat-aware transition timing once manual transitions
    are reliable. Pitch Helix remains a later experiment.
-7. **Fireworks.** No new foundation. Prototype the detonate-in-flight timing against the percussion and
+7. **Fireworks (done, Milestone 8).** No new foundation. Prototype the detonate-in-flight timing against the percussion and
    impulse fixtures before any polish, compare it with plain apex bursts, then add the shell table, willow
    trails and floor light pools. Same F0 brief and acceptance checks as the other scenes.
 8. **Lightning Storm and Ripple Pond.** Alternatives to Fireworks, outlined only. Build one at most as the
@@ -1360,6 +1360,130 @@ two screen passes). The one hitch of the run (p95 25 ms over 20 frames, the log'
 - Quality settings beyond Curtains: a render-scale control and a star-layer count are the obvious ones if a weaker GPU needs
   them (the ribbon pass and the stars are the two costs that scale).
 
+
+## Milestone 8: Fireworks (scene 10 in the table, ID 9)
+
+Rockets climb a dark sky while the music is loud, and a hit sets one off. IDs: 9 = Fireworks.
+
+**Shipped**
+
+- `scenes/fireworks.rs` (the choreography `Show`, the scene; unit-tested), `fireworks_sim.wgsl` (compute) and `fireworks.wgsl`
+  (floor, rockets, stars), on the existing `Particles` ring (65,536 particles, 4.3 s longest life, non-MSAA). Camera: eye
+  (0, 2, 23) aimed at (0, 5.6, 0), 40 degrees, two thirds sky. The pad line is 12.5 x aspect wide, 14 to 40 (see the findings).
+- Hits: `modulation::RiseHits`, the shared detector the plan asked for (same shape and tests as `PeakHits`). It works on the Fountain's
+  normalized rise, so Sensitivity keeps its meaning: strength is 0 at the Fountain's `SPARK_START` and 1 at `SPARK_FULL`, at the
+  sensitivity. Peaks along the 192 bins, merged unless the rise dips below 0.7 of the lower peak between them, a hit reported once its
+  rise has peaked (or after 15 ms), one per position per 120 ms, and an event (hits starting within 60 ms) is at most its two
+  strongest parts. Each bin is judged after taking off twice its own slow average (0.6 s). Dense music is thinned: every hit in the last
+  second raises the strength the next needs by 0.12.
+- Rockets: a table of 16 closed-form arcs in Rust (apex 1.1-1.5 s, 5-10 units high), launched from pads scattered +-6 in depth along
+  the line, at 0.12 + 0.95 x the sustained level of the lows, mids and highs (about 0.4 to 3 a second in all, none with the gate
+  closed). A hit sets off the rocket in the air nearest its place on the line, in the same frame, where it is; with none within
+  0.28 of the line's width and above 3.5 units, a mortar pops low (3.8-6). A rocket nobody sets off bursts at its apex, small and
+  dim, unless four bursts are already alive, when it fades out instead. In silence the rockets fizzle in 0.35 s and nothing launches.
+- Bursts: the CPU sends a burst's line position, strength, seed and star count in `PartU.bursts` and its centre and radius in
+  `PartU.extra` (so at most four a frame; the queue carries the rest). Slot 0 of a burst is the detonation flash, the others are
+  stars: directions from a Fibonacci spiral over the star's index (a round shell at any size), each star's frequency picked by
+  rejection sampling on the displayed spectrum at that moment (colour on the theme ramp, a little of its speed), with a mild treble
+  tilt. The hit's place sets the kind: willow below 0.30 of the line (big, heavy drag, 3-4 s, trails up to 1.2 units that droop),
+  peony to 0.66 (even sphere, 2-3 s), crackle above (small, fast, 0.8-1.5 s, twinkling by a hash of time). A star is born white-hot,
+  takes its colour, cools toward ember orange, lights up over 0.22 s as the shell opens, and the brightest 7% use the accent role.
+  Sparks that reach the floor bounce and burn out, and are mirrored in the glass like the Fountain's.
+- Bounds: a hit beyond seven live bursts (2.6 s) is dropped, stars per burst thin by 1/(1 + 0.2 x alive), Density scales them
+  (100-900 each), the floor keeps at most eight pools of light (a quick flash plus a glow that rises over 0.6 s and fades with the
+  burst), radius shrinks to 0.7 of full toward 16:9. Motion scales the wind on the stars and the idle camera, Flash scales the
+  detonation flash and all floor light (Flash 0 leaves bare stars).
+- `particles_draw.wgsl` gained `sprite_make_trail` (the streak length per particle; `sprite_make` is the old call with `TRAIL_S`).
+- Four looks (Gold Willow, Ice Chrysanthemum, Neon Peony, Prism Finale), stored thumbnails, Display menu Sensitivity and Density
+  (the Fountain's, tooltips updated), a Motion tooltip, README, `GEQ_FWDEBUG=1` (one line per hit and burst).
+  `settings` needed no new field (`look` grows to ten).
+
+**Measured** (5120x1440, real time, GPU times from timestamp queries, no other `geq-gpu` running)
+
+| Case | fps | frame median / p99 | Scene (`scene`) | Compute (`scene_upd`) | Bloom |
+|------|-----|--------------------|-----------------|-----------------------|-------|
+| Dense fixture, designed settings | 120.0 (119.9 in one window) | 8.0-8.9 / 9.4-9.7 ms | 0.25-0.53 ms (median 0.47) | 0.00 ms | 0.45 ms |
+| Dense, Density 1.5, Sensitivity 1.8 | 120.0 | 8.33 / 8.7-9.0 ms | 0.26-0.83 ms (median 0.61) | 0.01 ms | 0.45 ms |
+
+`cost_ms` is 0.8 (the brief guessed 0.3-1 ms). The choreography and detector cost 0.24 microseconds a frame on the CPU
+(`cargo test --release cpu_cost -- --ignored --nocapture`). The frame-time tail moved between runs in this session while the scene's own
+cost did not: the same scene gave p95 8.6-8.7 ms earlier, 9.3-9.4 ms in the run above and 8.9-9.0 ms next to a Fountain control at
+8.5, so the 0.3-0.8 ms of tail is the machine (Spotify and others were running), not the scene. All of them kept 120.0 fps with the
+worst frame under 10.3 ms. Transitions on the final build held 120.0 fps with p99 8.4-9.5 ms: Aurora into Fireworks, between two looks of
+it (one simulation, two draws) and out to the columns; two isolated single frames of 15.6 and 17.4 ms in a 55 s cycle were not tied to
+a transition. Prewarm is 6.6-7.5 ms. Tests: 87 pass (69 before: 8 for the detector, one of them on the real analyzer and the percussion
+fixture, and 10 for the choreography).
+
+Timing, with the percussion fixture's exact event times: every kick is one hit and one burst, 25 ms after the drum in the 120 Hz unit test
+(the rise is first measured one hop after it and then settles) and 33 ms in the stepped 60 Hz captures (two frames), every snare is two
+(its body on the left with the kicks, its crack on the right) and nothing falls between the drums. The impulse fixture gives one burst per
+impulse at the same delay. A burst is set off in the frame that reports the hit. The apex-only alternative was not built; the log says what
+it would be: a rocket reaches its apex 1.1-1.5 s after its launch whatever the music does, and the 16 apex bursts of the percussion
+log landed 0.05-0.57 s (median 0.20) from the nearest drum, which is an unrelated flash next to the real ones. So apex bursts are small,
+dim and kept to the quiet moments (fewer than four bursts alive), and the hits are what detonate.
+
+| Fixture, 40 s | Hits | Detonated | Mortar | Apex |
+|---------------|------|-----------|--------|------|
+| Demo (groove) | 80 (2.0 a second) | 61 | 17 | 3 |
+| Dense | 82 | 62 | 17 | 2 |
+| Percussion | 40 | 21 | 19 | 16 |
+| Tones (steady chord) | 1 | 0 | 1 | 51 |
+| Sweep | 12 | 5 | 7 | 36 |
+| Quiet (the demo at 3%) | 38 | 23 | 15 | 13 |
+| Silence | 0 | 0 | 0 | 0 |
+
+At most 23% of the sky region is lit (any channel above 45/255) in the dense captures, and 1-2.6% near white.
+
+**Findings worth keeping**
+
+- A broadband snare cleared the threshold in its body, its noisy middle and its crack, and gave three or four hits for one event. The
+  valley rule could not split or merge them, because strength saturates at 1 and the plateau is noise. Capping an event at its two
+  strongest parts left a kick as one burst and a snare as two. Strength is tracked above 1 (to 2) for finding the peak and clamped on
+  output: with the clamp a hit that kept climbing past full looked flat and was reported a frame late.
+- A steady chord whose partials sit within about two bins of the 21 ms window beats inside it, so its rise jitters at the chord's own
+  frequencies; with only a threshold it detonated 1.8 times a second (44 hits in 24 s on the tones fixture). A slow per-bin
+  background (twice its 0.6 s average) took it to zero and the demo from 3.3 to 1.9 hits a second, with kicks and snares unchanged
+  (swept in `dump_hit_tuning`: minimum strength 0.18/0.30/0.45 against background factor 1/1.5/2).
+- Streak length proportional to speed made hedgehogs: a willow star leaves at 13 units a second and a 0.34 s trail is a line most of
+  the way to the burst's edge. Each kind caps its streak in world units (1.2, 0.38, 0.25), so only the slow stars of a falling willow
+  reach the long droop. Straight quads read as drooping trails in stills; the F3 persistence fallback was not needed.
+- 1,200-1,500 overlapping additive stars burn to a flat yellow disc (centre pixels 250/255), with the detonation flash lost inside it.
+  Dimmer stars (0.30 + 0.32 x strength), a shell that lights up over 0.22 s from 30%, smaller counts and a bigger flash gave dark gaps
+  between stars and a core that stands apart. The amber theme through ACES reads gold-yellow, with the orange only in the cooling tails.
+- A rectilinear view at 32:9 stretches whatever stands near the edges. The first camera (50 degrees, 17.5 away, a line 46 wide) put
+  the outer pads 52 degrees off the axis and the far-right burst came out an ellipse about 1.6 times too wide. Backing off to 23 units at
+  40 degrees and holding the line to 40 (41 degrees at the outermost pad, 1.3x) made the shells round. Parallax is weaker at the
+  longer distance, and the depth scatter of +-6 still gives sizes 0.8-1.35.
+- Detonating the shell in flight needs rockets in the air: on the sparse percussion fixture half the hits find none and pop a mortar,
+  on the demo and dense songs 78% find one.
+- A kick on every beat is a willow on the left every beat, so the left side is rarely empty on four-on-the-floor music; the
+  count thinning (1/(1 + 0.2 x alive)) and the seven-burst cap are what keep that to a dome, not a wall.
+- A capture is perturbed when the pointer is over the capture window: one of five thumbnail candidates showed a different camera.
+  Two runs that hash identically is the check, and the thumbnails above were only accepted when a pair matched. `GEQ_SIZE=1280x360`
+  gets a window 520 high (the minimum), so aspect tests need 2560x720.
+- `tools/make-thumbs.sh` had a duplicate block that called `shot` before it was defined (it could not have run to the end); removed.
+
+**Differences from the brief**
+
+- A burst's `where` is its place on the line, not an index into a shell table (the table is a uniform of its own, `FwU`, that only the
+  rockets and the floor read): the centre and radius travel in `PartU.extra`, which caps a frame at four bursts.
+- A snare is two bursts (body left, crack right), where the brief says one per event; a kick is one.
+- Hits are judged against their own background, which the Fountain does not do, so Sensitivity moves both thresholds the same way
+  but a hit must also stand out from steady sound.
+- The spectrum sampler runs on the displayed level with a mild treble tilt (0.8 to 2.0), because real music's highs are quiet.
+- The floor's pool is a 0.1 s flash plus a glow that rises over 0.6 s and fades with the burst, not a single fade of 0.6 s.
+- A rocket turned away at its apex in a busy sky fades out instead of vanishing.
+
+**Not done / not verified**
+
+- Nothing here has been heard on real music, which this machine does not have; only the synthetic songs. The motion was judged from
+  stills at fixed times and the timing log, not watched live; the 33 ms was measured in stepped captures, not with a real-time
+  recording of the output.
+- Windowed 2560x720, 1600x900 and the windowed UI were looked at; tall portrait windows were not. The look browser thumbnails are
+  19.9 s of the demo.
+- The apex burst of a quiet passage is a small dim sphere (about 100 stars); it was seen in the tones and stereo logs and the unit
+  tests, and only glimpsed in stills.
+- No render scale or star-count quality setting beyond Density (the scene costs 0.5 ms).
 
 ## Fix: quieter sound while the app is open (2026-10-13)
 
