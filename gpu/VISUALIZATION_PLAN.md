@@ -36,6 +36,9 @@ follow its shared plumbing; Ferrofluid, Fountain, and Chladni follow once the sh
 | 7 | Chladni Sand | Grains forming and dissolving figures on vibrating plates | reuses 6 | simulation and grain coverage; measure | M |
 | 8 | Ferrofluid Orb | Glossy elastic lobes with frequency-driven fine spikes | offscreen height map and material shader | benchmark height map and displaced mesh | M |
 | 9 | Aurora | A few broad, layered curtains of spectrum light | history mesh, render scale, translucency | prototype at reduced resolution | M prototype |
+| 10 | Fireworks | Shells climb while the music is loud; a hit detonates one, and its sparks carry the hit's spectrum | reuses 6 (particles); shell table, per-spark trail length | sparse additive sprites, fill-bound at burst cores; measure | M |
+| 11 | Lightning Storm | A hit strikes the glass floor as a branching bolt where it lands, with return strokes and a thunder ring | procedural bolt geometry; hit detector shared with 10 | a few hundred thin analytic quads; measure | M |
+| 12 | Ripple Pond | Droplets fall on a glossy pool; each leaves rings that cross and interfere, a record of the last few seconds of hits | wave-equation height field on the smoke's pass helper | one fragment pass per fixed step plus a lit floor; measure | M |
 
 Size: **S** = a new shader mapping on plumbing that exists; **M** = new shaders plus one new data
 path; **L** = a new subsystem. These sizes describe implementation structure, not art-direction or
@@ -474,6 +477,149 @@ cost prototype, not a commitment to 24–32 full-width layers.
 
 Needs F2b/F2f and F5 render scale. Additional layers are a measured quality option, not a requirement.
 
+### 10. Fireworks — M
+
+*Proposed 2026-10-13, not built. It would take ID 9.*
+
+Shells climb the dark sky while the music is loud, and a hit detonates one. The sparks hang, droop and fall onto
+the glass floor, which lights up beneath them and mirrors them. It keeps what makes the Fountain work (rare,
+discrete events, bigger for harder hits, kicks on the left and snares on the right, readable at a glance) and adds
+what the Fountain cannot do: height and depth, a burst that hangs for three or four seconds, and a spectrum
+carried inside every burst.
+
+**Visual treatment:**
+
+- **Composition:** the Fountain's dark field, glass floor and emitter line (bass left, treble right), but with the
+  pads scattered about ±6 units in depth so simultaneous bursts overlap with parallax and different sizes. The
+  camera sits low and aims a little above level, leaving two thirds of the frame as sky. A burst's radius scales
+  with screen height, so shells stay round at 32:9, where four to six can stand side by side; at 16:9 the line
+  narrows and fewer may be alive at once. Negative space is part of the design: cap simultaneous bursts so the sky
+  is never full.
+- **Color:** the theme ramp runs from bass to treble along the sparks' frequencies (Rainbow reads each spark's
+  frequency directly). The accent role belongs to the detonation core and the brightest stars. A spark cools from
+  its colour toward ember orange over its life.
+- **Lighting:** a shell is a thin, sharp rising streak. A detonation is a small white-hot core, the only region
+  allowed near the brightest values, with the sparks well below it. Each live burst throws a radial pool of light
+  on the floor (at most eight at once, falling off with distance, fading in about 0.6 s), so lighting stays
+  local and nothing pulses the whole frame. The floor mirrors the sparks as in the Fountain; there is no sky to
+  reflect (the waterfall's glass no longer mirrors its sky either).
+
+**Musical mapping:**
+
+- **Energy launches, hits detonate.** The sustained low/mid/high envelopes (`sus`, gated) set how often shells
+  leave the pads in their stretch of the line (roughly 0.4–3 a second; none while the gate is closed). A shell
+  climbs for about a second, so something is always about to happen. A hit detonates, at once, the shell in flight
+  nearest its position on the line, at its current height; the hit's strength sets the burst's radius, spark
+  count, brightness and life. If no shell near it is high enough, a short-fuse mortar pops low, so a hit is never
+  unanswered. A shell nobody detonates bursts at its apex, small and dim, so quiet music still gets delicate
+  bursts. The point is timing: the flash lands on the hit, not half a second later, which is what launching a
+  shell *at* each hit and waiting for its apex would do, and what the "no unrelated delayed flashes" check forbids.
+- **Hits** come from the Fountain's normalized `rise` (already calibrated against real music and independent of
+  level), peak-picked along the 192 bins on the CPU with a refractory time per position: one peak is one hit,
+  with strength measured above the Fountain's threshold, so Sensitivity keeps its meaning. The onset rings are not
+  the source because the analyzer launches none for the highs, and the rise already puts a kick on the left and a
+  snare on the right. It has the same shape as `modulation::PeakHits` and gets the same kind of unit tests.
+- **Position sets the type.** Lows: a willow, a big slow gold sphere with heavy drag whose long trails droop to
+  the floor. Mids: a peony, an even sphere that is quicker, in theme colours. Highs: crackle, small, fast and
+  bright, its stars twinkling by a per-particle hash of time. That is a flicker, not child particles; the ring
+  buffer has no GPU-side spawning.
+- **A burst carries the spectrum of its hit.** Each spark picks a frequency by rejection sampling on the displayed
+  spectrum at the moment of detonation (the sampler in `spawn_spark`, run on level instead of rise), takes its
+  colour from that frequency's place on the ramp and its speed from that level. A bassy hit throws warm sparks,
+  a bright one cool ones, a broadband hit a multicolour shell, and no two bursts match. This may be subtle in a
+  small burst; judge it in motion, not in stills.
+- **Bounds and silence.** One detonation per position per ~120 ms, and spark counts shrink as more bursts are
+  alive. Density scales the count. Silence stops launches, undetonated shells fizzle out in the air and sparks
+  expire. Motion scales drift and wind; Flash scales the core and the floor light, and Flash 0 leaves bare sparks.
+
+**Implementation:**
+
+- `scenes/fireworks.rs`, `fireworks_sim.wgsl` and `fireworks.wgsl` on the existing `Particles` ring, built like
+  `fountain.rs` (non-MSAA; a floor draw, a mirrored draw, an upright draw). A burst slot already tells each spawn
+  its index within its burst, which is all a spherical burst needs: the direction from a Fibonacci spiral over that
+  index, the count from the plan (up to six bursts a frame).
+- The shells are plain Rust: a table of 16 closed-form ballistic arcs (position known at any time, deterministic,
+  unit-tested the way `smoke.rs`'s `drive()` is). The table goes to the GPU in a small uniform of its own
+  (`PartU.extra` has room for four vectors, not sixteen shells); a burst's `where` field indexes it, and the shell
+  streaks and the floor's light pools read it.
+- One change to the shared sprite code: the streak length is a constant (`TRAIL_S`, 0.045 s, in
+  `particles_draw.wgsl`) and a willow needs about 0.3 s, so it becomes a per-particle value. A straight quad
+  approximates the droop; if it reads as a polyline, fall back to a persistence buffer (F3).
+- No new settings fields: Density and Sensitivity are the Fountain's `density` and `gradient`. Four looks, as for
+  every scene: Gold Willow (the default), Ice Chrysanthemum, Neon Peony and Prism Finale (Rainbow).
+
+**Cost and risks** (hypotheses until measured):
+
+- A full-strength burst is perhaps 1,500 sparks; six live at once with 3–4 s lives is 10–20 thousand alive, far
+  fewer than the Fountain at its loudest (0.3–0.8 ms), so expect 0.3–1 ms. The cost is fill, not simulation, and
+  concentrates where a big burst overlaps itself while additive: start sparks small, cap the initial density, and
+  measure with the dense fixture.
+- Timing is the main risk. Compare detonate-in-flight against plain apex bursts with the percussion and impulse
+  fixtures. The acceptance check is one burst per event, appearing within a frame or two of the rise crossing the
+  threshold.
+- The idea is familiar; the differentiators (hit-timed detonation, the spectrum in every burst, the long hang over
+  a lit floor) have to carry it, so review stills and a short recording against the F0 brief.
+- Dense music must not fill the sky, and bursts are localized light, never a whole-frame flash. The Fountain's
+  sparks were once reported as passing through the floor; most firework stars burn out in the air, and those that
+  land use the same floor-clipped, bouncing streaks.
+
+Needs no new foundation: F4, F2b/F2f and F5's non-MSAA path all exist.
+
+### 11. Lightning Storm — M
+
+*Proposed 2026-10-13 as an alternative to Fireworks, outlined only: it needs a full F0 brief before work starts.*
+
+The Fountain's idea with a different event: each hit strikes the glass floor as a bolt of branching light, at the
+frequency where it landed (kicks on the left, snares on the right), and the floor lights up and mirrors it. A hit
+is rare, brief and unmistakable, and nothing else in the catalog is drawn as sparse line art.
+
+- **Hits** come from the same peak-picked `rise` detector as Fireworks (shared code if both are built), so
+  Sensitivity means the same thing. Strength sets the bolt's thickness, branch count and number of return strokes.
+- **Bolt:** a main channel from above the frame to the floor, plus a few branches, generated in the vertex shader by
+  midpoint displacement from a per-hit seed (so captures repeat exactly). Segments are drawn with the Vectorscope's
+  closed-form Gaussian beam, so thin bolts are analytically anti-aliased and do not need MSAA. A bolt flickers
+  through one to three return strokes in about 150 ms and leaves a dim channel that fades in roughly 0.3 s.
+- **Position sets the character:** lows strike thick with few branches and send a thunder ring across the floor
+  (as the Tunnel's rings and the Ferrofluid's floor ripples do); highs are thin, many-branched and short. The strike
+  point throws the Fountain's floor spark splash. Between strikes, faint discharges on the emitter line rise with the
+  level, so the scene is not empty in sustained passages.
+- **Lighting and bounds:** a radial pool of light under each strike and a mirrored bolt in the glass, never a
+  whole-frame flash. Return strokes are capped so that no region of the screen flashes more than three times a
+  second; Flash scales the strokes' brightness. Silence draws no new bolts and the remaining channels fade out.
+- **Cost and risks (hypotheses):** a few hundred quads, so well under the Fountain's cost (expect under 0.5 ms).
+  The risks are look, not cost: procedural bolts can read as a plasma-ball cliché or as flat zigzags, and a
+  one-pixel bolt shimmers at 120 Hz unless its width follows the pixel footprint. Prototype the bolt shape and its
+  return-stroke timing alone, in a still sequence, before building the rest.
+
+### 12. Ripple Pond — M
+
+*Proposed 2026-10-13 as an alternative to Fireworks, outlined only: it needs a full F0 brief before work starts.*
+
+The Fountain's sparks fall into water instead of bouncing. Each landing sends rings across a glossy dark pool, and
+because rings cross, the surface is a living record of the last few seconds of hits, the way the waterfall is a
+record of the spectrum. Bass hits drop heavy and make wide, slow rings; treble makes small, quick ones.
+
+- **Surface:** a wave-equation height field on a fixed-step grid (the smoke's accumulator, fragment-pass helper and
+  `Rg16Float` ping-pong textures), with a sponge border so rings leave instead of bouncing back, and clamped
+  heights so a dense passage cannot blow the field up. The pond is a perspective floor quad shaded from the height
+  map's gradient; ripples are small, so it needs no displaced mesh.
+- **Drops:** a hit throws a few droplets in arcs from its place on the emitter line, using the same peak-picked hit
+  detector as Fireworks. The drops that make ripples are a bounded table of closed-form arcs on the CPU (the plan's
+  particle buffer cannot report landings back), 64 at most; a decorative spray can use `Particles`. A landing adds
+  an impulse whose size and width follow the drop. Strength sets the number and weight of the drops.
+- **Look:** a near-black surface that reflects a few strip lights in the theme's colours (reuse the Ferrofluid
+  studio), so a passing ring sweeps highlights across the pool. Mirror the droplets in the water, distorted by the
+  local slope. Bloom stays restrained, or the fine rings smear.
+- **Silence:** rings damp out and leave a calm glass surface with slow reflections, consistent with the other
+  scenes' floors.
+- **Cost and risks (hypotheses):** one cheap pass per step on a grid of about 1280×360 (each of the smoke's pressure
+  iterations is 0.03 ms), plus the lit floor, so expect under 1 ms. The plain wave equation is not dispersive, so the
+  bass/treble character comes from each impulse's size and from damping, not true water behaviour; try a damped
+  higher-order term if it looks synthetic. The main risk is that it reads as generic water: specular glints on thin
+  rings alias at 120 Hz unless the normal is filtered by the pixel footprint, and the drops-to-rings chain adds a
+  delay between a hit and its visible ring that the timing check ("one accent per event, no delayed flashes")
+  must accept or the drops must be shortened.
+
 ### Later, after the showcase meets its visual standard
 
 - **Pitch Helix.** The spectrum wound onto a helix with one turn per octave and twelve positions per
@@ -505,6 +651,11 @@ Needs F2b/F2f and F5 render scale. Additional layers are a measured quality opti
 6. **Particles and optional show features.** F4, sparse Sparks on the improved columns, then Fountain
    and Chladni. Add auto-cycle and optional F2g beat-aware transition timing once manual transitions
    are reliable. Pitch Helix remains a later experiment.
+7. **Fireworks.** No new foundation. Prototype the detonate-in-flight timing against the percussion and
+   impulse fixtures before any polish, compare it with plain apex bursts, then add the shell table, willow
+   trails and floor light pools. Same F0 brief and acceptance checks as the other scenes.
+8. **Lightning Storm and Ripple Pond.** Alternatives to Fireworks, outlined only. Build one at most as the
+   next experiment, starting from its F0 brief, and share the peak-picked hit detector with Fireworks.
 
 The app is shippable after each implementation milestone. Defer additional scenes when the current
 showcase still has unresolved composition, timing, or frame-pacing problems.
