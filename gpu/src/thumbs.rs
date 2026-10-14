@@ -4,7 +4,7 @@
 use eframe::egui;
 
 /// In `presets::LOOKS` order.
-const DATA: [&[u8]; 42] = [
+const DATA: [&[u8]; 46] = [
     include_bytes!("../assets/thumbs/0-studio.png"),
     include_bytes!("../assets/thumbs/0-amber-rack.png"),
     include_bytes!("../assets/thumbs/0-ice-deck.png"),
@@ -47,6 +47,10 @@ const DATA: [&[u8]; 42] = [
     include_bytes!("../assets/thumbs/10-ember-strike.png"),
     include_bytes!("../assets/thumbs/10-neon-arc.png"),
     include_bytes!("../assets/thumbs/10-prism-bolt.png"),
+    include_bytes!("../assets/thumbs/11-moonlit-pond.png"),
+    include_bytes!("../assets/thumbs/11-lantern-pond.png"),
+    include_bytes!("../assets/thumbs/11-neon-canal.png"),
+    include_bytes!("../assets/thumbs/11-prism-rain.png"),
 ];
 
 #[derive(Default)]

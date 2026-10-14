@@ -542,6 +542,7 @@ mod tests {
             grains: 1.0,
             spikes: 1.0,
             curtains: 6,
+            ripple_life: 1.0,
             spectrum: [0.0; crate::analyzer::CURVE_POINTS],
             rise: [0.0; crate::analyzer::CURVE_POINTS],
         }

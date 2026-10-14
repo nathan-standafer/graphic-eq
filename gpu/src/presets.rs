@@ -2,7 +2,7 @@
 //! scene. They are separate from the EQ presets and never touch gains, bypass or routing.
 
 use crate::render::BLOOM_LEVELS;
-use crate::scenes::{AURORA, CHLADNI, COLUMNS, FERROFLUID, FIREWORKS, FOUNTAIN, LIGHTNING, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
+use crate::scenes::{AURORA, CHLADNI, COLUMNS, FERROFLUID, FIREWORKS, FOUNTAIN, LIGHTNING, RIPPLE, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
 
 /// Idle camera path amplitudes at Motion = 1: yaw, pitch (radians), dolly (fraction), roll (radians).
 #[derive(Clone, Copy)]
@@ -52,7 +52,10 @@ const FIREWORKS_IDLE: Idle = Idle { yaw: 0.04, pitch: 0.012, zoom: 0.03, roll: 0
 /// The storm is watched from a fixed spot low on the glass too.
 const LIGHTNING_IDLE: Idle = Idle { yaw: 0.04, pitch: 0.012, zoom: 0.03, roll: 0.0 };
 
-pub const LOOKS: [Look; 42] = [
+/// The pond is watched from a fixed spot above the water: the idle path sways the view a few degrees.
+const RIPPLE_IDLE: Idle = Idle { yaw: 0.04, pitch: 0.010, zoom: 0.03, roll: 0.0 };
+
+pub const LOOKS: [Look; 46] = [
     // ---- columns
     Look {
         scene: COLUMNS, name: "Studio", theme: 0, exposure: 1.0,
@@ -283,6 +286,29 @@ pub const LOOKS: [Look; 42] = [
         scene: LIGHTNING, name: "Prism Bolt", theme: 4, exposure: 0.9,
         bloom: [0.30, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.95, knee: 0.5, vignette: 0.5,
         motion: 0.6, flash: 0.7, idle: LIGHTNING_IDLE,
+    },
+    // ---- ripple pond: fine rings must survive, so the halo is tight and the broad glow faint; only the towers'
+    // reflections may bloom (Motion is how far the towers drift and the camera wanders, Flash the towers' flares and
+    // the droplets' glow)
+    Look {
+        scene: RIPPLE, name: "Moonlit Pond", theme: 2, exposure: 1.0,
+        bloom: [0.22, 0.26, 0.18, 0.11, 0.07, 0.04], threshold: 1.0, knee: 0.5, vignette: 0.6,
+        motion: 0.5, flash: 0.8, idle: RIPPLE_IDLE,
+    },
+    Look {
+        scene: RIPPLE, name: "Lantern Pond", theme: 1, exposure: 1.0,
+        bloom: [0.22, 0.26, 0.20, 0.12, 0.07, 0.04], threshold: 1.0, knee: 0.5, vignette: 0.6,
+        motion: 0.5, flash: 0.8, idle: RIPPLE_IDLE,
+    },
+    Look {
+        scene: RIPPLE, name: "Neon Canal", theme: 3, exposure: 0.95,
+        bloom: [0.24, 0.28, 0.20, 0.12, 0.07, 0.04], threshold: 1.0, knee: 0.5, vignette: 0.55,
+        motion: 0.5, flash: 0.8, idle: RIPPLE_IDLE,
+    },
+    Look {
+        scene: RIPPLE, name: "Prism Rain", theme: 4, exposure: 0.9,
+        bloom: [0.22, 0.26, 0.18, 0.11, 0.07, 0.04], threshold: 1.05, knee: 0.5, vignette: 0.5,
+        motion: 0.5, flash: 0.7, idle: RIPPLE_IDLE,
     },
 ];
 

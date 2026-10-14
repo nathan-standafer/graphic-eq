@@ -235,6 +235,9 @@ impl App {
         if let Ok(v) = std::env::var("GEQ_CURTAINS") {
             cfg.aurora_curtains = v.parse().unwrap_or(cfg.aurora_curtains);
         }
+        if let Ok(v) = std::env::var("GEQ_RIPPLE_LIFE") {
+            cfg.ripple_life = v.parse().unwrap_or(cfg.ripple_life);
+        }
         if std::env::var("GEQ_SPARKS").map_or(false, |v| v == "0") {
             cfg.sparks = false;
         }
@@ -501,6 +504,7 @@ impl App {
             grains: self.cfg.sand_grains,
             spikes: self.cfg.orb_spikes,
             curtains: self.cfg.aurora_curtains,
+            ripple_life: self.cfg.ripple_life,
             spectrum: self.spectrum_f,
             rise: self.rise,
         }
@@ -1268,14 +1272,14 @@ impl App {
                         ui.label(RichText::new("SPARKS").small().weak());
                         touched |= ui
                             .add(egui::Slider::new(&mut self.cfg.spark_sensitivity, 0.4..=3.0).logarithmic(true).text("sensitivity"))
-                            .on_hover_text("How steeply the volume at a frequency must rise to throw sparks (or, in the fireworks, to set off a shell, or in the storm to strike). Higher = more.")
+                            .on_hover_text("How steeply the volume at a frequency must rise to throw sparks (or, in the fireworks, to set off a shell, in the storm to strike, in the pond to splash). Higher = more.")
                             .changed();
                     }
                     Control::Density => {
                         ui.label(RichText::new("PARTICLES").small().weak());
                         touched |= ui
                             .add(egui::Slider::new(&mut self.cfg.density, 0.25..=1.5).text("density"))
-                            .on_hover_text("How many particles the fountain launches, stars in each firework, or branches and sparks in each lightning strike")
+                            .on_hover_text("How many particles the fountain launches, stars in each firework, branches and sparks in each lightning strike, or droplets in each splash of the pond")
                             .changed();
                     }
                     Control::SmokeThickness => {
@@ -1306,6 +1310,13 @@ impl App {
                             .on_hover_text("The most curtains standing in the sky. A narrower picture shows fewer of them anyway; fewer curtains are quieter and cheaper.")
                             .changed();
                     }
+                    Control::RippleLife => {
+                        ui.label(RichText::new("POND").small().weak());
+                        touched |= ui
+                            .add(egui::Slider::new(&mut self.cfg.ripple_life, 0.4..=2.5).logarithmic(true).text("ripple life"))
+                            .on_hover_text("How long a ripple lives. Short gives a quick, clean pond; long a surface crowded with the last several seconds of hits.")
+                            .changed();
+                    }
                     Control::ScopePersistence => {
                         ui.label(RichText::new("PERSISTENCE").small().weak());
                         touched |= ui
@@ -1333,6 +1344,8 @@ impl App {
                     "How far the stars drift on the wind and how far the camera wanders. 0 holds the sky still."
                 } else if self.cfg.scene == scenes::LIGHTNING {
                     "How far the camera wanders. 0 holds the view still."
+                } else if self.cfg.scene == scenes::RIPPLE {
+                    "How far the light towers drift and the camera wanders. 0 holds the reflections still (the water still follows the music)."
                 } else if self.cfg.scene == scenes::FERROFLUID {
                     "How elastic the fluid is: spikes thrown out by a hit, wobbling lobes, breathing, and how fast the lights drift around it. 0 gives a fluid that only follows the loudness, in still light."
                 } else {
@@ -1341,7 +1354,7 @@ impl App {
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.motion, 0.0..=1.5)).on_hover_text(motion_tip).changed();
                 ui.end_row();
                 ui.label("Flash");
-                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses (puffs from the smoke jets, the glow of sand on a hit, the lights and tip glow of the ferrofluid orb, the highlights that run up the aurora's rays, the flash of a firework and the light it throws on the floor, the strokes of a lightning bolt with the light and thunder ring it throws on the floor; 0 leaves only a dim channel). 0 turns them off.").changed();
+                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses (puffs from the smoke jets, the glow of sand on a hit, the lights and tip glow of the ferrofluid orb, the highlights that run up the aurora's rays, the flash of a firework and the light it throws on the floor, the strokes of a lightning bolt with the light and thunder ring it throws on the floor, the flares of the pond's light towers and the glow of its droplets; 0 leaves only a dim channel). 0 turns them off.").changed();
                 ui.end_row();
                 ui.label("Glow");
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.bloom, 0.0..=2.0)).changed();

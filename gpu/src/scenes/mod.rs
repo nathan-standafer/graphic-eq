@@ -16,6 +16,7 @@ pub mod fireworks;
 pub mod fountain;
 pub mod lightning;
 pub mod particles;
+pub mod ripple;
 pub mod sand;
 pub mod smoke;
 pub mod sparks;
@@ -35,7 +36,8 @@ pub const FERROFLUID: u32 = 7;
 pub const AURORA: u32 = 8;
 pub const FIREWORKS: u32 = 9;
 pub const LIGHTNING: u32 = 10;
-pub const ALL: [u32; 11] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE, CHLADNI, FERROFLUID, AURORA, FIREWORKS, LIGHTNING];
+pub const RIPPLE: u32 = 11;
+pub const ALL: [u32; 12] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE, CHLADNI, FERROFLUID, AURORA, FIREWORKS, LIGHTNING, RIPPLE];
 
 pub const DEPTH_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const MSAA: u32 = 4;
@@ -135,6 +137,8 @@ pub struct SceneParams {
     pub spikes: f32,
     /// Most curtains the aurora may show (the picture's shape can allow fewer).
     pub curtains: u32,
+    /// How long a ripple lives on the pond (1 = designed).
+    pub ripple_life: f32,
     /// The 192-point spectrum as displayed (0..1, after range and sensitivity), and how steeply each point is
     /// rising now, relative to the music's own hardest recent hits (about 1 at those).
     pub spectrum: [f32; CURVE_POINTS],
@@ -170,6 +174,7 @@ impl SceneParams {
             grains: 1.0,
             spikes: 1.0,
             curtains: 6,
+            ripple_life: 1.0,
             spectrum: [0.0; CURVE_POINTS],
             rise: [0.0; CURVE_POINTS],
         }
@@ -216,7 +221,7 @@ pub enum Control {
     ScopePersistence,
     /// Embers and sparks over the 3D columns.
     Sparks,
-    /// How many particles the fountain launches (and stars in a firework, branches and sparks in a strike).
+    /// How many particles the fountain launches (and stars in a firework, branches and sparks in a strike, droplets in a splash).
     Density,
     /// How steeply the volume must rise to throw sparks (and to detonate a shell).
     Gradient,
@@ -228,6 +233,8 @@ pub enum Control {
     OrbSpikes,
     /// How many curtains the aurora shows.
     AuroraCurtains,
+    /// How long a ripple lives on the pond.
+    RippleLife,
 }
 
 pub struct SceneInfo {
@@ -240,7 +247,7 @@ pub struct SceneInfo {
     pub cost_ms: f32,
 }
 
-const INFOS: [SceneInfo; 11] = [
+const INFOS: [SceneInfo; 12] = [
     SceneInfo {
         id: COLUMNS,
         name: "3D columns",
@@ -321,6 +328,13 @@ const INFOS: [SceneInfo; 11] = [
         cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
         controls: &[Control::Gradient, Control::Density],
         cost_ms: 0.5,
+    },
+    SceneInfo {
+        id: RIPPLE,
+        name: "Ripple Pond",
+        cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
+        controls: &[Control::Gradient, Control::Density, Control::RippleLife],
+        cost_ms: 1.2,
     },
 ];
 
@@ -439,6 +453,7 @@ fn create(id: u32, ctx: &Ctx) -> Box<dyn Scene> {
         AURORA => Box::new(aurora::Aurora::new(ctx)),
         FIREWORKS => Box::new(fireworks::Fireworks::new(ctx)),
         LIGHTNING => Box::new(lightning::Lightning::new(ctx)),
+        RIPPLE => Box::new(ripple::Ripple::new(ctx)),
         _ => Box::new(columns::Columns::new(ctx)),
     }
 }

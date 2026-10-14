@@ -143,6 +143,22 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   the branches and sparks); **Motion** is how far the camera wanders, **Flash** is the strokes' brightness and the
   light and thunder ring on the floor (0 leaves only a dim channel).
 
+- **Ripple Pond** - a glossy dark pool that keeps a record of the last few seconds of hits. A hit (the same detector as
+  the Fireworks and the storm) breaks the water at once where it landed on the line, bass at the left, a broad deep
+  crater for the lows and a small quick one for the highs, and throws a few droplets in arcs; each droplet that comes
+  back down drops a ring where it lands (a harder hit throws more of them). The surface is a damped wave equation on a
+  grid of cells 1/20 of a unit wide, stepped at 240 Hz by a fragment pass per step, with a sponge around its edge so
+  rings leave instead of coming back, so rings cross and interfere and the pool is a living picture of what was
+  just played. The water is a mirror: it shows a faint haze along the horizon and four light towers standing beyond the
+  far shore, which burn with the bands (bass at the left, highs at the right) and flare on onsets, so every passing
+  ring bends their reflections and sweeps highlights over the pool; the droplets are mirrored too, bent by the ripples
+  under them. The slope the water is shaded from is mipmapped and read anisotropically, so a thin ring far away is
+  averaged over the pixel's footprint instead of aliasing. In silence the rings damp out quickly and leave calm glass with slowly drifting reflections. Display
+  menu: **sensitivity** and **density** (density scales the droplets), **ripple life** (how long a ring lives: short
+  is a quick clean pond, long a surface crowded with hits); **Motion** is how far the towers drift and the camera
+  wanders (0 holds the reflections still; the water still follows the music), **Flash** is the towers' flares and the
+  droplets' glow.
+
 **Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
 (your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip
 appears on mouse movement and fades after a few seconds. Display menu: looks, colors, **Motion**
@@ -163,9 +179,15 @@ audio: no EQ engine, no routing changes, settings are read-only.
     # frame-time statistics and per-pass GPU time at 5120x1440
     GEQ_SYNTH=1 GEQ_SCENE=2 GEQ_FPS=1 GEQ_GPUTIME=1 GEQ_FULLSCREEN=1 cargo run --release
 
+A windowless check of any scene on the real GPU (no window, so it works with the monitor off; a synthetic signal, so it
+measures the scene's own cost, not frame pacing) saves the final composite as a PNG and prints the GPU time of each pass:
+
+    GEQ_HL_SCENE=11 GEQ_HL_SIZE=5120x1440 GEQ_HL_SECS=8 GEQ_HL_OUT=/tmp/pond.png \
+        cargo test --release headless_scene -- --ignored --nocapture   # GEQ_HL_SCENE2=n crossfades a second scene
+
 `GEQ_SHOT` with a synthetic source steps a simulated clock, so captures repeat exactly. Other hooks:
 `GEQ_PRESET`, `GEQ_THEME`, `GEQ_BLOOM`, `GEQ_MOTION`, `GEQ_FLASH`, `GEQ_STEREO`, `GEQ_ORBIT`,
-`GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor), `GEQ_FWDEBUG=1` (one line per firework hit and burst: its time, kind, strength and where it came from), `GEQ_LTDEBUG=1` (one line per lightning strike: its time, place, strength, strokes and branches),
+`GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor), `GEQ_FWDEBUG=1` (one line per firework hit and burst: its time, kind, strength and where it came from), `GEQ_LTDEBUG=1` (one line per lightning strike: its time, place, strength, strokes and branches), `GEQ_RPDEBUG=1` (one line per pond impulse: a crater or a landing), `GEQ_RIPPLE_LIFE=n` (how long a ripple lives, 0.4-2.5),
 `GEQ_GRADIENT=n` (fountain spark sensitivity), `GEQ_DENSITY=n` (fountain particle density), `GEQ_SPARKS=0` (columns without sparks),
 `GEQ_SMOKE_ITERS=n` (pressure iterations of the smoke solver, default 18; it changes how tall the plumes stand),
 `GEQ_GRAINS=n` (how much sand lies on the Chladni plates, 0.25-1.5), `GEQ_SPIKES=n` (spike height of the ferrofluid orb, 0.3-1.5),

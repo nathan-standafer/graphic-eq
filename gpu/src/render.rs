@@ -729,3 +729,217 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
         }
     }
 }
+
+/// A windowless check on the real adapter: the same `SceneCallback::prepare` the app runs every frame (scene
+/// passes, crossfade, bloom) into offscreen targets, with timestamp queries, and the final composite saved as a
+/// PNG. It needs no window and no display, so it works when the monitor is off, and it feeds the scene a synthetic
+/// signal (a kick-like hit every half second at a wandering place on the line, a slowly moving spectrum), so the
+/// timings are the scene's own cost and not a replacement for the app's frame-time run. Ignored by default:
+///   GEQ_HL_SCENE=11 GEQ_HL_SIZE=5120x1440 GEQ_HL_SECS=8 cargo test --release headless_scene -- --ignored --nocapture
+/// (GEQ_HL_LOOK picks the look, GEQ_HL_OUT the PNG; `GEQ_HL_SOFTWARE=1` uses the software adapter; `GEQ_HL_SCENE2=n`
+/// draws a second scene and crossfades half and half, as a transition does.)
+#[cfg(test)]
+mod headless {
+    use super::*;
+    use eframe::egui_wgpu::CallbackTrait;
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        let mut f = std::pin::pin!(f);
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        loop {
+            if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+                return v;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    /// One frame's synthetic parameters at time `t` (seconds): a hit every half second, a slowly moving spectrum.
+    fn params(scene: u32, look: &crate::presets::Look, t: f32) -> SceneParams {
+        let mut p = SceneParams::for_tests();
+        p.time = t;
+        p.theme = look.theme;
+        p.exposure = look.exposure;
+        p.flash = look.flash;
+        p.motion = look.motion;
+        p.gate = 1.0;
+        let k = (t * 2.0).floor();
+        let since = t - k / 2.0;
+        // where this half second's hit lands, and how far its envelope has decayed
+        let pos = ((k * 0.618034).fract() * 0.85 + 0.05).clamp(0.0, 1.0);
+        let env = (-since / 0.09).exp();
+        for i in 0..crate::analyzer::CURVE_POINTS {
+            let x = i as f32 / (crate::analyzer::CURVE_POINTS - 1) as f32;
+            let s = 0.50 * (-2.2 * x).exp() + 0.28 + 0.12 * (0.7 * t + 9.0 * x).sin();
+            p.spectrum[i] = s.clamp(0.0, 1.0);
+            // a rise only for the first three frames of the hit, across a few bins
+            p.rise[i] = if since < 0.026 { 1.5 * (-((x - pos) / 0.04).powi(2)).exp() } else { 0.05 };
+        }
+        for i in 0..11 {
+            p.levels[i] = p.spectrum[i * 17].clamp(0.0, 1.0);
+            p.peaks[i] = (p.levels[i] + 0.08).min(1.0);
+        }
+        p.sus = [0.6 + 0.2 * (0.5 * t).sin(), 0.5, 0.45, 0.5];
+        p.fx = [if pos < 0.35 { env } else { 0.0 }, if (0.3..0.7).contains(&pos) { env } else { 0.0 }, if pos > 0.6 { env } else { 0.0 }, 0.0];
+        let _ = scene;
+        p
+    }
+
+    fn history_row(t: f32) -> Vec<u8> {
+        let n = crate::analyzer::CURVE_POINTS;
+        (0..n)
+            .flat_map(|i| {
+                let x = i as f32 / (n - 1) as f32;
+                let s = (0.50 * (-2.2 * x).exp() + 0.28 + 0.12 * (0.7 * t + 9.0 * x).sin()).clamp(0.0, 1.0);
+                let v = (s * 255.0) as u8;
+                [v, v, v, 0]
+            })
+            .collect()
+    }
+
+    #[test]
+    #[ignore]
+    fn headless_scene() {
+        let env = |k: &str| std::env::var(k).ok();
+        let scene: u32 = env("GEQ_HL_SCENE").and_then(|v| v.parse().ok()).unwrap_or(scenes::RIPPLE);
+        let look_ix: usize = env("GEQ_HL_LOOK").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let (w, h) = env("GEQ_HL_SIZE")
+            .and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))))
+            .unwrap_or((5120, 1440));
+        let scene2: Option<u32> = env("GEQ_HL_SCENE2").and_then(|v| v.parse().ok());
+        let secs: f32 = env("GEQ_HL_SECS").and_then(|v| v.parse().ok()).unwrap_or(8.0);
+        let out = env("GEQ_HL_OUT").unwrap_or_else(|| "/tmp/geq-headless.png".into());
+
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: env("GEQ_HL_SOFTWARE").is_some(),
+            compatible_surface: None,
+            apply_limit_buckets: false,
+        }))
+        .expect("an adapter");
+        eprintln!("adapter: {} ({:?})", adapter.get_info().name, adapter.get_info().backend);
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .expect("a device");
+        // validation errors are failures here, not log lines
+        let errors = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        {
+            let errors = errors.clone();
+            device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| errors.lock().unwrap().push(e.to_string())));
+        }
+
+        let fmt = wgpu::TextureFormat::Rgba8Unorm;
+        let mut resources = CallbackResources::default();
+        resources.insert(Gpu::new(&device, &queue, fmt));
+        let look = crate::presets::get(scene, look_ix);
+        let look2 = crate::presets::get(scene2.unwrap_or(scene), 0);
+        let post = PostLook { threshold: look.threshold, knee: look.knee, weights: look.bloom, master: 0.9, vignette: look.vignette };
+        let screen = ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: 1.0 };
+
+        let frames = (secs * 120.0) as usize;
+        let t_start = std::time::Instant::now();
+        let mut cpu_ms = Vec::new();
+        for f in 0..frames + 12 {
+            let t = f as f32 / 120.0;
+            let cb = SceneCallback {
+                draws: std::iter::once(Draw { scene, p: params(scene, look, t) })
+                    .chain(scene2.map(|s2| Draw { scene: s2, p: params(s2, look2, t) }))
+                    .collect(),
+                mix: if scene2.is_some() { 0.5 } else { 0.0 },
+                freeze_outgoing: false,
+                post,
+                time: t,
+                size_px: [w, h],
+                rows: if f % 2 == 0 { vec![history_row(t)] } else { Vec::new() },
+                wave: Vec::new(),
+            };
+            let c0 = std::time::Instant::now();
+            let mut enc = device.create_command_encoder(&Default::default());
+            cb.prepare(&device, &queue, &screen, &mut enc, &mut resources);
+            queue.submit([enc.finish()]);
+            cpu_ms.push(c0.elapsed().as_secs_f32() * 1000.0);
+            if f % 6 == 5 {
+                let _ = device.poll(wgpu::PollType::wait_indefinitely()); // keep the queue short
+            }
+        }
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let wall = t_start.elapsed().as_secs_f32();
+
+        // the passes' mean GPU time (timestamp queries arrive a few frames late)
+        let gpu: &mut Gpu = resources.get_mut().unwrap();
+        for _ in 0..6 {
+            if let Some(tm) = gpu.timer.as_mut() {
+                tm.begin_frame(&device);
+            }
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        match gpu.timer.as_mut() {
+            Some(tm) => {
+                let report = tm.take_report();
+                let sum: f32 = report.iter().map(|(_, ms)| ms).sum();
+                eprintln!("gpu (mean per frame, {w}x{h}, scene {scene}, look {look_ix}): {} | sum {sum:.2} ms", report.iter().map(|(n, ms)| format!("{n} {ms:.2}")).collect::<Vec<_>>().join("  "));
+            }
+            None => eprintln!("no timestamp queries on this adapter"),
+        }
+        cpu_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!("cpu to record a frame: median {:.2} ms, p99 {:.2} ms; {frames} frames in {wall:.1} s of wall time (submit-bound, not real time)", cpu_ms[cpu_ms.len() / 2], cpu_ms[cpu_ms.len() * 99 / 100]);
+
+        // the final composite, as the app's last pass draws it, saved as a PNG
+        let gpu: &Gpu = resources.get().unwrap();
+        let t = gpu.targets.as_ref().unwrap();
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("headless_out"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: fmt,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let row = (w * 4).next_multiple_of(256);
+        let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("headless_comp"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&gpu.comp_pipe);
+            pass.set_bind_group(0, &t.comp_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        buf.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let data = buf.slice(..).get_mapped_range().expect("mapped");
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h as usize {
+            rgba.extend_from_slice(&data[y * row as usize..y * row as usize + (w * 4) as usize]);
+        }
+        let (mut sum, mut bright) = (0u64, 0u32);
+        for px in rgba.chunks_exact(4) {
+            let l = px[0] as u32 + px[1] as u32 + px[2] as u32;
+            sum += l as u64;
+            bright += (l > 3 * 200) as u32;
+        }
+        eprintln!("picture: mean level {:.1}/255, {:.3}% of pixels near white; saved {out}", sum as f64 / (w as f64 * h as f64 * 3.0), 100.0 * bright as f64 / (w as f64 * h as f64));
+        image::save_buffer(&out, &rgba, w, h, image::ColorType::Rgba8).expect("png");
+        let errs = errors.lock().unwrap();
+        assert!(errs.is_empty(), "wgpu errors: {errs:?}");
+    }
+}

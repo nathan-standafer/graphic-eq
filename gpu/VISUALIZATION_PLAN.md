@@ -593,7 +593,7 @@ is rare, brief and unmistakable, and nothing else in the catalog is drawn as spa
 
 ### 12. Ripple Pond — M
 
-*Proposed 2026-10-13 as an alternative to Fireworks, outlined only: it needs a full F0 brief before work starts.*
+*Built, ID 11: see Milestone 10 for what shipped, what was measured and where it differs from this outline. The text below is the original outline.*
 
 The Fountain's sparks fall into water instead of bouncing. Each landing sends rings across a glossy dark pool, and
 because rings cross, the surface is a living record of the last few seconds of hits, the way the waterfall is a
@@ -654,8 +654,8 @@ record of the spectrum. Bass hits drop heavy and make wide, slow rings; treble m
 7. **Fireworks (done, Milestone 8).** No new foundation. Prototype the detonate-in-flight timing against the percussion and
    impulse fixtures before any polish, compare it with plain apex bursts, then add the shell table, willow
    trails and floor light pools. Same F0 brief and acceptance checks as the other scenes.
-8. **Lightning Storm (done, Milestone 9) and Ripple Pond.** Alternatives to Fireworks, outlined only. Both share
-   the peak-picked hit detector with Fireworks.
+8. **Lightning Storm (done, Milestone 9) and Ripple Pond (done, Milestone 10).** Alternatives to Fireworks, outlined
+   only. Both share the peak-picked hit detector with Fireworks.
 
 The app is shippable after each implementation milestone. Defer additional scenes when the current
 showcase still has unresolved composition, timing, or frame-pacing problems.
@@ -1591,6 +1591,124 @@ lights 22 ms later, when the leader arrives.
 - A cloud: the strikes come from nothing above the frame. A faint glow in the sky around the top of each channel was left out to
   keep the field dark; try it if the empty top reads as unfinished.
 - The look browser thumbnails are 12.6 s of the demo; another moment may suit a look better.
+
+## Milestone 10: Ripple Pond (scene 12 in the table, ID 11)
+
+A dark glossy pool that keeps a record of the last few seconds of hits. IDs: 11 = Ripple Pond. **The monitor was off for most of
+this session** (see the notes at the end), so everything below that needs a display was done on the software renderer or by the new
+windowless harness, and the real-time frame-time run was not done.
+
+**Shipped**
+
+- `scenes/ripple.rs` (the choreography `Pond`, the solver's drive, the scene; unit-tested), `ripple_common.wgsl` (the uniform block),
+  `ripple_sim.wgsl` (the offscreen passes) and `ripple.wgsl` (haze, towers, water, droplets). Non-MSAA.
+- The surface: the damped wave equation on a grid of square cells 1/20 of a world unit wide (1280 x 480 at 32:9, a pond 64 x 24 units
+  and about 1.6 x the line the drops start from; a whole number of 8-cell blocks so the mips halve exactly), state `Rg32Float`
+  (height and velocity, read with `textureLoad`, so no float-filtering feature is needed). One fragment pass per step on the smoke's
+  pass helper (`run_pass`, `Stamper`, made shared): semi-implicit Euler, `v' = v e^(-gamma dt) + dt c^2 lap(h)`, `h' = h + dt v'`, at a
+  fixed 1/240 s through an accumulator that rounds, like the smoke's (a steady 120 Hz is exactly two steps a frame, 60 Hz four, a stall
+  is capped at eight and the backlog dropped). The wave runs at 7 units a second, which is 0.58 cells a step (the explicit scheme's
+  limit is 0.71; a test asserts it). A sponge raises the damping toward the edge (14 per second at the very edge, over 60 cells), a small
+  leak (0.25 per second) on the height returns a lasting displacement to flat, and the height (0.4 units) and the velocity are clamped, so
+  a dense passage cannot blow the field up. Impulses are Ricker wavelets of displacement (zero mean, so each leaves a clean ring and no
+  lasting hump), added in equal pieces over the frame's steps. Damping is 0.7 per second at Ripple life 1 and 2.2 per second more as the
+  gate closes, so the rings die out quickly when the music stops.
+- Hits (`modulation::RiseHits`, shared unchanged): each breaks the water in the frame that reports it, at its place on the line (jittered
+  +-1 in depth), with a crater whose sigma and depth follow the position and strength (lows 0.36 x (0.75 + 0.45 strength) wide and
+  deepest, highs 0.11 and 0.55 x as deep; `pop_for`), and throws droplets: one to five that make rings (the lows' land near the source and later, after 0.4 to 0.65 s over
+  0.6 to 1.6 units; the highs' are light and quick, 0.26 to 0.42 s, and scatter up to 4.5 units), and three to eight that only show. Each droplet is a closed-form ballistic arc
+  in a table of 64 (`Drop`), so the CPU knows the instant it lands and puts a smaller ring there (sigma 0.63-0.85 and depth 0.48-0.70
+  of the crater's); nothing needs reading back from the GPU, and the particle system is not used.
+- The shading reads a slope texture (`Rgba16Float`: slope in x and z per world unit, and the height), written by a pass after the steps
+  from central differences of the exact state, and mipmapped by three box-filter passes; the water samples it with an anisotropic
+  (8x) trilinear sampler, so a thin ring far away is averaged over the pixel's footprint instead of aliasing. (The plan feared
+  specular glints aliasing at 120 Hz; whether this removes all shimmer was not judged in motion.)
+- The water: near-black, Fresnel (0.09 at normal incidence, strong at grazing angles), mirroring a haze along the horizon and four light
+  towers (`rect_light_at`, the Ferrofluid's studio function, now returning where the ray met the light so the reflection fades up the
+  tower). Bass is the left tower, the highs the right, each burns with its region's sustained level and flares on its onsets (Flash),
+  and all stay lit in silence and drift very slowly (Motion). Because a mirror of a dark sky shows almost nothing, the water also has a
+  sheen on the faces of the ripples turned toward the towers (`pow(n . L, 6)`), which is what makes a ring visible away from a
+  reflection. The haze is a thin glow at the horizon, and the sky quad below the horizon is the water's far reflection at grazing
+  angles, so the two meet without a seam. The droplets are mirrored in the water, bent by the slope under them.
+- Four looks (Moonlit Pond, Lantern Pond, Neon Canal, Prism Rain), stored thumbnails, Sensitivity, Density and a new **Ripple life** slider
+  in the Display menu (`ripple_life` in the settings, 0.4-2.5, `GEQ_RIPPLE_LIFE`; older files load), `GEQ_RPDEBUG=1`, README.
+- Shared: `rect_light_at` in `common.wgsl` (the Ferrofluid's render in the harness is byte-identical with the old `rect_light` and the new wrapper); `run_pass` and `Stamper` shared from `smoke.rs`; and a **windowless test harness**
+  (`render.rs`, `headless_scene`, ignored by default) that drives the real `SceneCallback::prepare` on the real adapter into
+  offscreen targets with a synthetic signal, prints each pass's GPU time and saves the final composite as a PNG. It needs no display, treats any
+  wgpu validation error as a failure, and `GEQ_HL_SCENE2` draws a second scene to measure a crossfade.
+
+**Measured** (windowless harness, RX 580 under RADV, 5120x1440, synthetic signal with a hit every half second, GPU times from timestamp queries)
+
+| Case | Simulation (`scene_upd`) | Scene (`scene`) | Bloom | Frame total |
+|------|--------------------------|-----------------|-------|-------------|
+| Ripple Pond alone | 0.23 ms | 0.89-0.91 ms | 0.44 ms | 1.57-1.59 ms |
+| Ripple + Lightning, live crossfade | 0.11 ms | 0.88 + 0.31 ms | 0.44 ms + 0.40 ms crossfade | 2.14 ms |
+| Ripple, two looks (one simulation, two draws) | 0.11 ms | 0.89 + 0.89 ms | 0.44 ms + 0.39 ms crossfade | 2.72 ms |
+
+`cost_ms` is 1.2. The simulation's cost depends on the aspect, not the pixel count (2560x720 measured 0.25 ms, the scene 0.23 ms). The
+CPU needs 1.2 ms median (2.0 ms p99) to record a frame. Sixty simulated seconds of hits at 2560x720 gave no wgpu errors and no NaN or Inf
+(`GEQ_VIEW=nan`), and the same for Lightning. Prewarm was not measured. **Not measured: frame time in real time at 120 Hz** (the monitor
+was off, which stops presentation; see below). The GPU cost is a fifth of the frame, so the expectation is 120 fps, but it is an
+expectation. Tests: 104 pass (10 are new for the pond, 7 for the storm).
+
+Timing, with the percussion and impulse fixtures: a crater is injected in the frame that reports the hit, 33 ms after the drum in the
+stepped 60 Hz captures (the same detector as the other two scenes), so the first ring is there at once; the droplets' rings follow 0.3 to
+0.7 s later. Impulses per 40 s: demo 288, dense 292, percussion 160, impulse 156, quiet 139, sweep 48, tones 3, silence 0 (the
+Fireworks' hit counts are 80, 82, 40, 39, 38, 12, 1, 0: a hit makes a crater and, on average, two to three landings).
+
+**Findings worth keeping**
+
+- A mirror of a near-black sky shows no rings: the first version reflected only the haze and the towers, and a ring away from a tower
+  changed the reflected haze by about 0.005 (worked out from the haze's gradient, not measured), a few levels of 255, and the first captures
+  showed rings that were barely there. The sheen on the faces turned toward the towers (and a darker, then
+  sharper, falloff, `pow(.., 6)`) is what made rings legible, with the flat water near black (about 0.012 at rest).
+- Dimming the towers without dimming their reflections put the mirror image brighter than the tower, a step at the waterline in the
+  full-resolution render. Reflection gain is now the tower's own (1.8) and the Fresnel factor does the rest.
+- The first sky painted the horizon haze at full strength below the horizon, between the horizon and the water's far clip, where the
+  water reflects only a fraction of it: a flat bright band with a hard lower edge. Painting that part as the Fresnel-weighted reflection
+  of the haze removed the band and left a thin horizon glow.
+- Four tall towers were pillars that took the picture from the pond (and ran off the top of the frame): shorter (5 to 8 units), thinner
+  and farther (z = -25), with their tops in view, they read as lights on the far shore.
+- A pond that mirrors the sky has a fixed far end: the camera's far plane (100 units) clips the water before the horizon, so the sky
+  quad has to paint what is between.
+- The explicit wave equation is not dispersive, so the bass and treble character is only the crater's size and depth; all rings
+  travel at 7 units a second. The damped higher-order (capillary) term the outline suggested was not tried; the rings read as water
+  without it.
+- Test of the scheme on a CPU copy of the shader's step: with the sponge less than 6% of a drop's energy is left a second after it
+  was dropped (the ring has crossed the field), against more than four times as much left without it; 80 craters a second (far beyond any music) saturate the
+  velocity clamp but the surface settles when they stop.
+- The pond's grid follows the aspect (a whole number of 8-cell blocks) and does not depend on the window's pixel count, so a small window
+  runs the same simulation at the same cost.
+
+**Differences from the outline**
+
+- A hit breaks the water at once (a crater at its place on the line) in addition to the droplets that land later: the outline's own
+  timing note said the drops-to-rings delay must be accepted or shortened, and a ring that starts 0.4 s after the hit would read as a
+  delayed flash. The droplets' landings are the secondary rings.
+- The droplets that make rings and the ones that only show are one table (64) of closed-form arcs; the particle system is not used for
+  the spray.
+- The tower rig is four vertical strips beyond the far shore (not the Ferrofluid's six-light studio), because a vertical strip is what a
+  ripple turns into a streak; the Ferrofluid's `rect_light` is shared.
+- A new setting, `ripple_life` (how long a ring lives), for the record's length, which is this scene's one parameter that is neither
+  Sensitivity nor Density.
+- The state is `Rg32Float` (exact, load-only) and the filtered texture is a separate `Rgba16Float` slope map with mips, where the outline
+  said `Rg16Float` ping-pong textures.
+
+**Not done / not verified**
+
+- **Real-time frame time and the live app on the real GPU.** The monitor was off for most of the session (`xset q`: `Monitor is Off`, DPMS
+  timeouts all 0, so it was switched off, the same as on 2026-10-13), and the app's window never presents then. I did not force it on.
+  Everything visual was therefore judged on the software renderer (llvmpipe in a nested X server, `Xephyr`) and on the windowless harness
+  on the RX 580; the unmeasured pieces are the real-time p95 and p99 over a minute, the scene cycle through the pond in the live app, and
+  prewarm.
+- **The Ripple Pond thumbnails (`assets/thumbs/11-*.png`) were captured on the software renderer** (20.4 s of the demo, deterministic:
+  each look hashed identically twice), not on the RX 580. Run `tools/make-thumbs.sh` with the display on to replace them.
+- The `GEQ_SHOT` path on the real GPU was not run for the pond; the windowless harness uses the same compositor and the same shaders, with a
+  synthetic signal, and its 5120x1440 renders were looked at.
+- Nothing here has been heard on real music, which this machine does not have; only the synthetic songs.
+- Motion (the ripples' shimmer under the camera's idle drift, the 120 Hz look of fine rings) was judged from stills and a silence
+  sequence, not watched live. Tall portrait windows were not looked at; 32:9, 16:9 and 1600x450 were.
+- Not done: the capillary (dispersive) term, a render scale for the water shading (it costs 0.9 ms), a quality setting for the grid.
 
 ## Fix: quieter sound while the app is open (2026-10-13)
 

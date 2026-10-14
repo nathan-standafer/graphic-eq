@@ -28,4 +28,6 @@ shot 8 0 8-boreal-green 13.6;  shot 8 1 8-polar-ice 13.6;      shot 8 2 8-neon-v
 shot 9 0 9-gold-willow 19.9;   shot 9 1 9-ice-chrysanthemum 19.9; shot 9 2 9-neon-peony 19.9; shot 9 3 9-prism-finale 19.9
 # the lightning: at 12.6 s two bolts are up with a thunder ring and a splash of sparks
 shot 10 0 10-ice-storm 12.6;   shot 10 1 10-ember-strike 12.6;     shot 10 2 10-neon-arc 12.6;   shot 10 3 10-prism-bolt 12.6
+# the pond: at 20.4 s several rings from the last seconds of hits cross, with towers lit and spray in the air
+shot 11 0 11-moonlit-pond 20.4; shot 11 1 11-lantern-pond 20.4;    shot 11 2 11-neon-canal 20.4; shot 11 3 11-prism-rain 20.4
 cargo build --release

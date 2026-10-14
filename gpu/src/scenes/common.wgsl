@@ -96,14 +96,21 @@ fn erf_approx(x: f32) -> f32 {
 // meets its plane at distance t; `soft` blurs the edges by a fixed length and `foot` by a length that grows with t
 // (the pixel's footprint on that plane, plus the surface's roughness), so a thin strip seen in a surface that curves
 // fast fades instead of shimmering, and a rough floor smears a far light more than a near one.
-fn rect_light(c: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, hw: f32, hh: f32, p: vec3<f32>, r: vec3<f32>, foot: f32, soft: f32) -> f32 {
+// `rect_light_at` also says where the ray met the plane: (coverage, distance along ax, distance along ay) from the centre.
+fn rect_light_at(c: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, hw: f32, hh: f32, p: vec3<f32>, r: vec3<f32>, foot: f32, soft: f32) -> vec3<f32> {
   let nrm = cross(ax, ay);
   let dn = dot(r, nrm);
   let t = dot(c - p, nrm) / select(dn, 1e-4, abs(dn) < 1e-4);
   let tt = max(t, 0.0);
   let hit = p + r * tt - c;
   let s = soft + foot * tt;
-  let mx = 1.0 - smoothstep(hw - s, hw + s, abs(dot(hit, ax)));
-  let my = 1.0 - smoothstep(hh - s, hh + s, abs(dot(hit, ay)));
-  return mx * my * select(0.0, 1.0, t > 0.0);
+  let ha = dot(hit, ax);
+  let hb = dot(hit, ay);
+  let mx = 1.0 - smoothstep(hw - s, hw + s, abs(ha));
+  let my = 1.0 - smoothstep(hh - s, hh + s, abs(hb));
+  return vec3<f32>(mx * my * select(0.0, 1.0, t > 0.0), ha, hb);
+}
+
+fn rect_light(c: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, hw: f32, hh: f32, p: vec3<f32>, r: vec3<f32>, foot: f32, soft: f32) -> f32 {
+  return rect_light_at(c, ax, ay, hw, hh, p, r, foot, soft).x;
 }

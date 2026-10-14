@@ -216,13 +216,13 @@ fn texture(device: &wgpu::Device, label: &str, size: [u32; 2], format: wgpu::Tex
 
 /// Hands out timestamp writes so the scene's whole update (every solver pass and the shading) is one
 /// measured span: the first pass records the start and the last one the end.
-struct Stamper<'a> {
-    ts: Option<&'a wgpu::RenderPassTimestampWrites<'a>>,
-    first: bool,
+pub(super) struct Stamper<'a> {
+    pub(super) ts: Option<&'a wgpu::RenderPassTimestampWrites<'a>>,
+    pub(super) first: bool,
 }
 
 impl<'a> Stamper<'a> {
-    fn next(&mut self, last: bool) -> Option<wgpu::RenderPassTimestampWrites<'a>> {
+    pub(super) fn next(&mut self, last: bool) -> Option<wgpu::RenderPassTimestampWrites<'a>> {
         let t = self.ts?;
         let begin = if self.first { t.beginning_of_pass_write_index } else { None };
         let end = if last { t.end_of_pass_write_index } else { None };
@@ -232,7 +232,7 @@ impl<'a> Stamper<'a> {
     }
 }
 
-fn run_pass(enc: &mut wgpu::CommandEncoder, label: &str, pipe: &wgpu::RenderPipeline, bg: &wgpu::BindGroup, dst: &wgpu::TextureView, ts: Option<wgpu::RenderPassTimestampWrites>) {
+pub(super) fn run_pass(enc: &mut wgpu::CommandEncoder, label: &str, pipe: &wgpu::RenderPipeline, bg: &wgpu::BindGroup, dst: &wgpu::TextureView, ts: Option<wgpu::RenderPassTimestampWrites>) {
     let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -546,6 +546,7 @@ mod tests {
             grains: 1.0,
             spikes: 1.0,
             curtains: 6,
+            ripple_life: 1.0,
             spectrum: [0.0; crate::analyzer::CURVE_POINTS],
             rise: [0.0; crate::analyzer::CURVE_POINTS],
         }
