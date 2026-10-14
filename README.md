@@ -129,6 +129,20 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   drift on the wind and how far the camera wanders, **Flash** is the detonation flash and the light the bursts throw
   on the floor (0 leaves bare stars).
 
+- **Lightning Storm** - each hit strikes the glass floor as a bolt of branching light, where it landed on the line
+  (kicks on the left, snares on the right; the same detector as the Fireworks, so **sensitivity** means the same).
+  Every bolt is built on the GPU from its own seed by midpoint displacement and drawn as thin glowing lines that are
+  anti-aliased analytically: the first stroke runs down the channel in about 20 ms, one to three return strokes
+  flicker (a harder hit flickers more), and a dim channel stays behind for a third of a second. Where the hit landed
+  sets the character: lows strike thick with few branches, from the clouds above the frame, and send a **thunder ring**
+  out across the floor; highs are thin, many-branched and short. The strike throws a pool of light on the glass and a
+  splash of sparks, and every bolt is mirrored in the floor. Between strikes faint discharges flicker on the spectrum
+  line and grow with the level. No part of the line flashes more than three times a second: a strike that finds three
+  full ones already within a fifth of the line in the last second is drawn as a dim ghost, with no flash on the floor.
+  Silence strikes nothing and what is up fades out. Display menu: **sensitivity** and **density** (density scales
+  the branches and sparks); **Motion** is how far the camera wanders, **Flash** is the strokes' brightness and the
+  light and thunder ring on the floor (0 leaves only a dim channel).
+
 **Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
 (your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip
 appears on mouse movement and fades after a few seconds. Display menu: looks, colors, **Motion**
@@ -151,7 +165,7 @@ audio: no EQ engine, no routing changes, settings are read-only.
 
 `GEQ_SHOT` with a synthetic source steps a simulated clock, so captures repeat exactly. Other hooks:
 `GEQ_PRESET`, `GEQ_THEME`, `GEQ_BLOOM`, `GEQ_MOTION`, `GEQ_FLASH`, `GEQ_STEREO`, `GEQ_ORBIT`,
-`GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor), `GEQ_FWDEBUG=1` (one line per firework hit and burst: its time, kind, strength and where it came from),
+`GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor), `GEQ_FWDEBUG=1` (one line per firework hit and burst: its time, kind, strength and where it came from), `GEQ_LTDEBUG=1` (one line per lightning strike: its time, place, strength, strokes and branches),
 `GEQ_GRADIENT=n` (fountain spark sensitivity), `GEQ_DENSITY=n` (fountain particle density), `GEQ_SPARKS=0` (columns without sparks),
 `GEQ_SMOKE_ITERS=n` (pressure iterations of the smoke solver, default 18; it changes how tall the plumes stand),
 `GEQ_GRAINS=n` (how much sand lies on the Chladni plates, 0.25-1.5), `GEQ_SPIKES=n` (spike height of the ferrofluid orb, 0.3-1.5),

@@ -2,7 +2,7 @@
 //! scene. They are separate from the EQ presets and never touch gains, bypass or routing.
 
 use crate::render::BLOOM_LEVELS;
-use crate::scenes::{AURORA, CHLADNI, COLUMNS, FERROFLUID, FIREWORKS, FOUNTAIN, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
+use crate::scenes::{AURORA, CHLADNI, COLUMNS, FERROFLUID, FIREWORKS, FOUNTAIN, LIGHTNING, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
 
 /// Idle camera path amplitudes at Motion = 1: yaw, pitch (radians), dolly (fraction), roll (radians).
 #[derive(Clone, Copy)]
@@ -49,7 +49,10 @@ const AURORA_IDLE: Idle = Idle { yaw: 0.03, pitch: 0.010, zoom: 0.02, roll: 0.0 
 /// The fireworks are watched from a fixed spot low on the glass: the idle path sways the view a few degrees.
 const FIREWORKS_IDLE: Idle = Idle { yaw: 0.04, pitch: 0.012, zoom: 0.03, roll: 0.0 };
 
-pub const LOOKS: [Look; 38] = [
+/// The storm is watched from a fixed spot low on the glass too.
+const LIGHTNING_IDLE: Idle = Idle { yaw: 0.04, pitch: 0.012, zoom: 0.03, roll: 0.0 };
+
+pub const LOOKS: [Look; 42] = [
     // ---- columns
     Look {
         scene: COLUMNS, name: "Studio", theme: 0, exposure: 1.0,
@@ -257,6 +260,29 @@ pub const LOOKS: [Look; 38] = [
         scene: FIREWORKS, name: "Prism Finale", theme: 4, exposure: 0.9,
         bloom: [0.30, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.95, knee: 0.5, vignette: 0.5,
         motion: 0.6, flash: 0.7, idle: FIREWORKS_IDLE,
+    },
+    // ---- lightning: the bolts are thin and bright, so the halo is tight and the broad glow stays faint; the pools of
+    // light on the glass do the rest (Motion is how far the camera wanders and the sparks drift, Flash the strokes'
+    // brightness, the pools of light and the thunder rings; Flash 0 leaves a dim channel)
+    Look {
+        scene: LIGHTNING, name: "Ice Storm", theme: 2, exposure: 1.0,
+        bloom: [0.30, 0.36, 0.28, 0.18, 0.10, 0.06], threshold: 0.9, knee: 0.5, vignette: 0.6,
+        motion: 0.6, flash: 0.8, idle: LIGHTNING_IDLE,
+    },
+    Look {
+        scene: LIGHTNING, name: "Ember Strike", theme: 1, exposure: 1.0,
+        bloom: [0.30, 0.36, 0.28, 0.18, 0.10, 0.06], threshold: 0.9, knee: 0.5, vignette: 0.6,
+        motion: 0.6, flash: 0.8, idle: LIGHTNING_IDLE,
+    },
+    Look {
+        scene: LIGHTNING, name: "Neon Arc", theme: 3, exposure: 0.95,
+        bloom: [0.32, 0.38, 0.28, 0.18, 0.10, 0.06], threshold: 0.9, knee: 0.5, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: LIGHTNING_IDLE,
+    },
+    Look {
+        scene: LIGHTNING, name: "Prism Bolt", theme: 4, exposure: 0.9,
+        bloom: [0.30, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.95, knee: 0.5, vignette: 0.5,
+        motion: 0.6, flash: 0.7, idle: LIGHTNING_IDLE,
     },
 ];
 

@@ -14,6 +14,7 @@ pub mod columns;
 pub mod ferro;
 pub mod fireworks;
 pub mod fountain;
+pub mod lightning;
 pub mod particles;
 pub mod sand;
 pub mod smoke;
@@ -33,7 +34,8 @@ pub const CHLADNI: u32 = 6;
 pub const FERROFLUID: u32 = 7;
 pub const AURORA: u32 = 8;
 pub const FIREWORKS: u32 = 9;
-pub const ALL: [u32; 10] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE, CHLADNI, FERROFLUID, AURORA, FIREWORKS];
+pub const LIGHTNING: u32 = 10;
+pub const ALL: [u32; 11] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE, CHLADNI, FERROFLUID, AURORA, FIREWORKS, LIGHTNING];
 
 pub const DEPTH_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const MSAA: u32 = 4;
@@ -214,7 +216,7 @@ pub enum Control {
     ScopePersistence,
     /// Embers and sparks over the 3D columns.
     Sparks,
-    /// How many particles the fountain launches (and stars in a firework).
+    /// How many particles the fountain launches (and stars in a firework, branches and sparks in a strike).
     Density,
     /// How steeply the volume must rise to throw sparks (and to detonate a shell).
     Gradient,
@@ -238,7 +240,7 @@ pub struct SceneInfo {
     pub cost_ms: f32,
 }
 
-const INFOS: [SceneInfo; 10] = [
+const INFOS: [SceneInfo; 11] = [
     SceneInfo {
         id: COLUMNS,
         name: "3D columns",
@@ -312,6 +314,13 @@ const INFOS: [SceneInfo; 10] = [
         cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
         controls: &[Control::Gradient, Control::Density],
         cost_ms: 0.8,
+    },
+    SceneInfo {
+        id: LIGHTNING,
+        name: "Lightning Storm",
+        cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
+        controls: &[Control::Gradient, Control::Density],
+        cost_ms: 0.5,
     },
 ];
 
@@ -429,6 +438,7 @@ fn create(id: u32, ctx: &Ctx) -> Box<dyn Scene> {
         FERROFLUID => Box::new(ferro::Ferrofluid::new(ctx)),
         AURORA => Box::new(aurora::Aurora::new(ctx)),
         FIREWORKS => Box::new(fireworks::Fireworks::new(ctx)),
+        LIGHTNING => Box::new(lightning::Lightning::new(ctx)),
         _ => Box::new(columns::Columns::new(ctx)),
     }
 }

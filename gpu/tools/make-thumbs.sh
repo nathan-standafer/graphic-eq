@@ -26,4 +26,6 @@ shot 7 0 7-obsidian-ice 13.6;  shot 7 1 7-ember-core 13.6;     shot 7 2 7-neon-m
 shot 8 0 8-boreal-green 13.6;  shot 8 1 8-polar-ice 13.6;      shot 8 2 8-neon-veil 13.6;  shot 8 3 8-prism-curtains 13.6
 # the fireworks: at 19.9 s a willow, a peony and a crackle are up together, with sky around them
 shot 9 0 9-gold-willow 19.9;   shot 9 1 9-ice-chrysanthemum 19.9; shot 9 2 9-neon-peony 19.9; shot 9 3 9-prism-finale 19.9
+# the lightning: at 12.6 s two bolts are up with a thunder ring and a splash of sparks
+shot 10 0 10-ice-storm 12.6;   shot 10 1 10-ember-strike 12.6;     shot 10 2 10-neon-arc 12.6;   shot 10 3 10-prism-bolt 12.6
 cargo build --release

@@ -70,14 +70,6 @@ fn beam_point(t: vec4<f32>, kind: u32) -> vec3<f32> {
   return out;
 }
 
-// erf by Abramowitz and Stegun 7.1.26 (error below 1.5e-7).
-fn erf_approx(x: f32) -> f32 {
-  let a = abs(x);
-  let t = 1.0 / (1.0 + 0.3275911 * a);
-  let y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-a * a);
-  return select(-y, y, x >= 0.0);
-}
-
 // A spot of standard deviation `sigma` swept along a segment of length `len`, as the mean over the sweep
 // (a stationary spot has peak 1): exp(-y²/2σ²) · σ√(2π)/len · ½ [erf((len-x)/σ√2) + erf(x/σ√2)].
 fn swept_spot(loc: vec2<f32>, len: f32, sigma: f32) -> f32 {

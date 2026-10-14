@@ -53,22 +53,6 @@ fn rot(v: vec3<f32>, sc: vec2<f32>) -> vec3<f32> {
   return vec3<f32>(sc.y * v.x + sc.x * v.z, v.y, -sc.x * v.x + sc.y * v.z);
 }
 
-// A rectangular light of half-sizes (hw, hh) along the unit vectors ax, ay, centred on c. The ray from p along r
-// meets its plane at distance t; `soft` blurs the edges by a fixed length and `foot` by a length that grows with t
-// (the pixel's footprint on that plane, plus the surface's roughness), so a thin strip seen in a surface that curves
-// fast fades instead of shimmering, and a rough floor smears a far light more than a near one.
-fn strip(c: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, hw: f32, hh: f32, p: vec3<f32>, r: vec3<f32>, foot: f32, soft: f32) -> f32 {
-  let nrm = cross(ax, ay);
-  let dn = dot(r, nrm);
-  let t = dot(c - p, nrm) / select(dn, 1e-4, abs(dn) < 1e-4);
-  let tt = max(t, 0.0);
-  let hit = p + r * tt - c;
-  let s = soft + foot * tt;
-  let mx = 1.0 - smoothstep(hw - s, hw + s, abs(dot(hit, ax)));
-  let my = 1.0 - smoothstep(hh - s, hh + s, abs(dot(hit, ay)));
-  return mx * my * select(0.0, 1.0, t > 0.0);
-}
-
 fn light_tint(t: f32, x: f32, white: f32) -> vec3<f32> {
   return mix(palette(t, x), vec3<f32>(1.0), white);
 }
@@ -89,12 +73,12 @@ fn strip_lights(p: vec3<f32>, r: vec3<f32>, soft: f32, foot: f32, flo: f32) -> v
   let ey = vec3<f32>(0.0, 1.0, 0.0);
   let ez = vec3<f32>(0.0, 0.0, 1.0);
   var e = vec3<f32>(0.0);
-  e += light_tint(0.0, 0.50, 0.30) * (3.4 * key * mix(1.0, 0.35, flo)) * strip(rot(vec3<f32>(0.0, 5.4, 0.8), sc), rot(ex, sc), rot(ez, sc), 5.2, 0.55, p, r, foot, soft);
-  e += light_tint(0.6, 0.10, 0.20) * (2.4 * side * tall) * strip(rot(vec3<f32>(-5.2, 2.7, 0.8), sc), rot(ey, sc), rot(ez, sc), 2.9, 0.34, p, r, foot, soft);
-  e += light_tint(0.6, 0.90, 0.20) * (2.4 * side * tall) * strip(rot(vec3<f32>(5.2, 2.7, 0.8), sc), rot(ey, sc), rot(ez, sc), 2.9, 0.34, p, r, foot, soft);
-  e += light_tint(0.8, 0.30, 0.15) * (3.0 * rim * tall) * strip(rot(vec3<f32>(-3.4, 2.4, -5.0), sc), rot(ey, sc), rot(ex, sc), 2.4, 0.24, p, r, foot, soft);
-  e += light_tint(0.8, 0.70, 0.15) * (3.0 * rim * tall) * strip(rot(vec3<f32>(3.4, 2.4, -5.0), sc), rot(ey, sc), rot(ex, sc), 2.4, 0.24, p, r, foot, soft);
-  e += light_tint(0.0, 0.50, 0.25) * (1.2 * low * (1.0 - flo)) * strip(rot(vec3<f32>(0.0, 0.45, 5.8), sc), rot(ex, sc), rot(ey, sc), 3.6, 0.10, p, r, foot, soft);
+  e += light_tint(0.0, 0.50, 0.30) * (3.4 * key * mix(1.0, 0.35, flo)) * rect_light(rot(vec3<f32>(0.0, 5.4, 0.8), sc), rot(ex, sc), rot(ez, sc), 5.2, 0.55, p, r, foot, soft);
+  e += light_tint(0.6, 0.10, 0.20) * (2.4 * side * tall) * rect_light(rot(vec3<f32>(-5.2, 2.7, 0.8), sc), rot(ey, sc), rot(ez, sc), 2.9, 0.34, p, r, foot, soft);
+  e += light_tint(0.6, 0.90, 0.20) * (2.4 * side * tall) * rect_light(rot(vec3<f32>(5.2, 2.7, 0.8), sc), rot(ey, sc), rot(ez, sc), 2.9, 0.34, p, r, foot, soft);
+  e += light_tint(0.8, 0.30, 0.15) * (3.0 * rim * tall) * rect_light(rot(vec3<f32>(-3.4, 2.4, -5.0), sc), rot(ey, sc), rot(ex, sc), 2.4, 0.24, p, r, foot, soft);
+  e += light_tint(0.8, 0.70, 0.15) * (3.0 * rim * tall) * rect_light(rot(vec3<f32>(3.4, 2.4, -5.0), sc), rot(ey, sc), rot(ex, sc), 2.4, 0.24, p, r, foot, soft);
+  e += light_tint(0.0, 0.50, 0.25) * (1.2 * low * (1.0 - flo)) * rect_light(rot(vec3<f32>(0.0, 0.45, 5.8), sc), rot(ex, sc), rot(ey, sc), 3.6, 0.10, p, r, foot, soft);
   return e;
 }
 

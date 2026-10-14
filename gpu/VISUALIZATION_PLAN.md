@@ -567,7 +567,7 @@ Needs no new foundation: F4, F2b/F2f and F5's non-MSAA path all exist.
 
 ### 11. Lightning Storm — M
 
-*Proposed 2026-10-13 as an alternative to Fireworks, outlined only: it needs a full F0 brief before work starts.*
+*Built, ID 10: see Milestone 9 for what shipped, what was measured and where it differs from this outline. The text below is the original outline.*
 
 The Fountain's idea with a different event: each hit strikes the glass floor as a bolt of branching light, at the
 frequency where it landed (kicks on the left, snares on the right), and the floor lights up and mirrors it. A hit
@@ -654,8 +654,8 @@ record of the spectrum. Bass hits drop heavy and make wide, slow rings; treble m
 7. **Fireworks (done, Milestone 8).** No new foundation. Prototype the detonate-in-flight timing against the percussion and
    impulse fixtures before any polish, compare it with plain apex bursts, then add the shell table, willow
    trails and floor light pools. Same F0 brief and acceptance checks as the other scenes.
-8. **Lightning Storm and Ripple Pond.** Alternatives to Fireworks, outlined only. Build one at most as the
-   next experiment, starting from its F0 brief, and share the peak-picked hit detector with Fireworks.
+8. **Lightning Storm (done, Milestone 9) and Ripple Pond.** Alternatives to Fireworks, outlined only. Both share
+   the peak-picked hit detector with Fireworks.
 
 The app is shippable after each implementation milestone. Defer additional scenes when the current
 showcase still has unresolved composition, timing, or frame-pacing problems.
@@ -1484,6 +1484,113 @@ At most 23% of the sky region is lit (any channel above 45/255) in the dense cap
 - The apex burst of a quiet passage is a small dim sphere (about 100 stars); it was seen in the tones and stereo logs and the unit
   tests, and only glimpsed in stills.
 - No render scale or star-count quality setting beyond Density (the scene costs 0.5 ms).
+
+## Milestone 9: Lightning Storm (scene 11 in the table, ID 10)
+
+A hit strikes the glass floor as a branching bolt where it landed. IDs: 10 = Lightning Storm. The plan asked for the bolt's
+shape and return-stroke timing to be prototyped alone, in a still sequence, before the rest; that is what the first captures were
+(bolt, floor and nothing else), and the ring, splash and discharges were added after the shape was accepted.
+
+**Shipped**
+
+- `scenes/lightning.rs` (the choreography `Storm`, the scene; unit-tested), `lightning.wgsl` (floor, bolts, discharges, sparks) and
+  `lightning_sim.wgsl` (compute, the splash). Non-MSAA. Camera: eye (0, 3, 21) aimed at (0, 4.8, 0), 42 degrees, so the floor takes
+  the bottom third, the clouds are above the frame, and the pad line is the Fireworks' (12.5 x aspect wide, 14 to 40).
+- Hits: `modulation::RiseHits`, shared with the Fireworks unchanged (same detector, same Sensitivity). Each hit is one strike in the
+  frame that reports it, at its place on the line and a random depth of +-5 (near strikes are bigger), seeded so captures repeat.
+- The bolt is generated in the vertex shader: a main channel of 64 segments by midpoint displacement and up to six branches of 16,
+  one draw of 160 instances per table slot, dead slots culled in the vertex shader. A vertex needs only the hat functions that cover
+  it (one node per level), so any segment is computed alone, with no recursion and no stored geometry; the same seed draws the same
+  bolt in every capture. Branches leave the lower two thirds of the channel (the part in frame) and run down and to one side.
+  Segments are capsules with a Gaussian profile integrated in closed form along their length (the Vectorscope's polynomial `erf`),
+  so thin lines are anti-aliased analytically; the sigma is the larger of the world width in pixels and 0.7 px, and a line thinner than
+  that keeps its energy by dimming, so it fades instead of shimmering at 120 Hz.
+- Strokes: the first runs down the channel in 22 ms (the leader), each return stroke flares and falls off in about 30 ms, a hard hit
+  has up to three (at 0, about 60 and about 110 ms), a branch joins each later stroke with probability 0.7 so the picture flickers, and
+  a dim channel stays behind (0.2 x exp(-age/0.11)), gone after 0.55 s. A hard stroke is white-hot, a fading one takes the theme's
+  dominant-to-supporting colour. Flash scales the strokes (0.3 + 0.7 x Flash, so Flash 0 leaves a dim channel).
+- Character by position (`lowness`, `highness`): lows have sigma up to 1.55x, few branches (2), a channel from 22 units up and a
+  thunder ring; highs 0.7x, up to six branches 0.7x as long, a channel from 13 units that fades in from nothing, and no ring.
+  Strength sets thickness, branches (1.5 + 3.5 x line) x (0.5 + 0.7 x strength) x Density, strokes (1, 2 or 3 at 0.5 and 0.85) and
+  the splash (40 to 200 sparks).
+- The floor: the Fountain's glass and spectrum line, with a pool of light under each strike that rises over 40 ms starting when the
+  leader reaches the floor (22 ms after the hit) and dies in about a second, and for a low strike a thunder ring (radius 1 + 7.5 x
+  age^0.85, widening, gone in about 2 s). Every bolt is mirrored in the glass (weak from above, strong at grazing angles).
+- A splash of sparks at the strike point on the `Particles` ring (16,384, 1.2 s longest life): a low crown that bounces once or twice.
+- Faint discharges: 24 slots of 8 segments on the spectrum line, each flickering on and off by a hash of time (about 9 Hz), on more
+  often and taller where the level is high, closed with the signal gate. Pure shader, no CPU state.
+- Bound: no part of the line flashes more than three times a second. A flash is a strike and its return strokes are its flicker (as in
+  meteorology); a strike that finds three full strikes within 0.2 of the line in the last second is a ghost (one stroke at 0.16
+  brightness, no pool, ring or splash), so a hit is never unanswered. The floor's light does not follow the individual strokes.
+  Silence (gate below 0.2) strikes nothing.
+- Four looks (Ice Storm, Ember Strike, Neon Arc, Prism Bolt), stored thumbnails, Sensitivity and Density in the Display menu,
+  `GEQ_LTDEBUG=1`, README. Settings need no new field (`look` grows to eleven).
+- Shared code moved: `erf_approx` and the Ferrofluid's `strip` (now `rect_light`) live in `common.wgsl`, `Rng` and `lerp` are shared
+  from `fireworks.rs`. The Vectorscope, Ferrofluid and Fireworks captures are byte-identical before and after (checked by hash).
+
+**Measured** (5120x1440, real time, GPU times from timestamp queries, dense and demo signals)
+
+| Case | fps | frame median / p99 | Scene (`scene`) | Compute (`scene_upd`) | Bloom |
+|------|-----|--------------------|-----------------|-----------------------|-------|
+| Dense fixture, steady | 120.0 | 8.33 / 10.3-12.6 ms | 0.27-0.34 ms | 0.00 ms | 0.45 ms |
+| Fireworks control, same session | 120.0 | 8.33 / 10.4-13.0 ms | | | |
+| Demo, scene cycle (into and out of it, and between two looks) | 119.9-120.0 | 8.3-9.1 / 9.3-9.8 ms | | | |
+
+`cost_ms` is 0.5 (the outline expected under 0.5 ms for the scene). The p99 of the first two rows is the machine, not the scene: the
+Fireworks control run in the same session gave the same tail, and the cycle run a few minutes later, with the same scene, gave p99
+9.3-9.8 ms. Prewarm is 10 ms. One 14.6 ms frame in the cycle was the Fireworks-to-Lightning crossfade, once. Tests: 94 pass (7 are new).
+
+Timing, with the percussion and impulse fixtures' exact event times: every kick is one strike and every snare two (its body on the left
+with the kicks, its crack on the right), 33 ms after the drum in the stepped 60 Hz captures (the same as the Fireworks, from the same
+detector), and the impulse fixture gives one strike per impulse. The strike appears in the frame the detector reports it; the floor
+lights 22 ms later, when the leader arrives.
+
+| Fixture, 40 s | Strikes | Ghosts |
+|---------------|---------|--------|
+| Demo (groove) | 80 | 0 |
+| Dense | 82 | 0 |
+| Percussion | 40 | 0 |
+| Impulse | 39 | 0 |
+| Tones (steady chord) | 1 | 0 |
+| Sweep | 12 | 0 |
+| Quiet (the demo at 3%) | 38 | 0 |
+| Silence | 0 | 0 |
+
+(These are the Fireworks' hit counts exactly, as they should be: the same detector.)
+
+**Findings worth keeping**
+
+- Midpoint displacement needs no recursion on a GPU: the sum over levels of hat functions at the new nodes gives the same polyline,
+  and one vertex evaluates only the node of each level whose hat covers it. Six levels per endpoint is nothing next to the fill.
+- The first camera (the Fireworks' aim, 6 units up) left the floor as a thin strip at the bottom and most branches above the frame:
+  the channel is 22 units tall and the frame shows the lower 13, so branch origins are taken from the lower two thirds of the
+  channel (y about 4 to 13), and aiming at 4.8 gave the floor a third of the picture.
+- The floor lit before the bolt reached it (the pool began at age 0, the leader takes 22 ms). Starting the pool and ring after the
+  leader made the flash land at contact, which reads as the strike instead of as a lamp turning on.
+- The first discharges (24 slots, 0.45-1.95 tall, probability 1.7 x level squared) read as a row of worms that competed with the
+  strikes; shorter (0.3-1.2), dimmer (0.07 + 0.36 x level) and half as likely they are the quiet crackle the outline asked for.
+- The cap counts flashes, not strokes, by reasoning rather than by trial (the stroke-counting version was never built): a hard hit has
+  three strokes, so a stroke budget of three a second would turn every second kick of a steady 120 BPM groove into a ghost. Counting
+  strikes keeps that kick at full strength and still thins a hi-hat roll to three full strikes a second (a unit test floods one place
+  with a hit every 60 ms and checks both).
+- A thunder ring needs to be thin and quick to read as a shock wave: at width 0.35 + 0.9 x age and 0.55 brightness it was barely
+  visible against the pool of light; 0.25 + 0.55 x age at 1.3 read as a ring on the perspective floor, but was too strong at 16:9, and
+  0.95 is the compromise.
+
+**Differences from the outline**
+
+- Bolts come from above the frame at every position, but a high one starts at 13 units and fades in, so it is short on screen.
+- Return strokes are bounded as flashes (bolts), not as individual strokes; see the bound above.
+- The bolt's colour is a theme role pair, white-hot at its brightest, not a single tint.
+
+**Not done / not verified**
+
+- Nothing here has been heard on real music, which this machine does not have; only the synthetic songs. The timing was measured in
+  stepped captures and the log, not with a real-time recording of the output.
+- Windowed 2560x720, 1600x450 and 1600x900 were looked at; tall portrait windows were not.
+- A cloud: the strikes come from nothing above the frame. A faint glow in the sky around the top of each channel was left out to
+  keep the field dark; try it if the empty top reads as unfinished.
+- The look browser thumbnails are 12.6 s of the demo; another moment may suit a look better.
 
 ## Fix: quieter sound while the app is open (2026-10-13)
 

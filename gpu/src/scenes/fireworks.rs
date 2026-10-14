@@ -111,15 +111,19 @@ pub fn radius_scale(width: f32) -> f32 {
     (0.7 + 0.3 * (width - 14.0) / 26.0).clamp(0.7, 1.0)
 }
 
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
+pub(super) fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
 /// xorshift32: the choreography's randomness, seeded by `reset` so captures repeat.
-struct Rng(u32);
+pub(super) struct Rng(u32);
 
 impl Rng {
-    fn next(&mut self) -> f32 {
+    pub(super) fn seeded(seed: u64) -> Rng {
+        Rng((seed as u32).wrapping_mul(2654435761).wrapping_add(0x9e3779b9) | 1)
+    }
+
+    pub(super) fn next(&mut self) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 17;
         self.0 ^= self.0 << 5;
@@ -220,7 +224,7 @@ impl Show {
             shells: Vec::new(),
             pools: Vec::new(),
             carry: [0.0; 3],
-            rng: Rng((seed as u32).wrapping_mul(2654435761).wrapping_add(0x9e3779b9) | 1),
+            rng: Rng::seeded(seed),
             recent: Vec::new(),
             queue: VecDeque::new(),
             launched: 0,
