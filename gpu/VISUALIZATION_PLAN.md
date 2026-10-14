@@ -920,3 +920,31 @@ smoke run, before MacCormack, had p99 9.2 ms.
 
 **Not done yet**: a quality setting for the grid and iteration count (the cost is low enough to leave at 1.45 ms),
 a render scale for the shading pass, and tuning on real music.
+
+## Fix: quieter sound while the app is open (2026-10-13)
+
+- Cause: the "Graphic EQ" virtual sink did not start at unity. WirePlumber's `restore-stream` saves a sink's volume under
+  `Audio/Sink:media.name:Graphic EQ` and restores it when the sink next appears. The sink was the default, so the volume keys
+  changed it and the change was saved. Here it held 0.5116 linear ("80%", -5.82 dB) and came back every start, stacked on the
+  real output's own volume. Every band at 0 dB is a pass-through, so EQ off made no difference. At 100% the sink is exactly
+  transparent (a 0.2 peak tone came out at 0.2, and at 50% it came out at 0.025, an eighth, on the cubic scale).
+- First fix, kept: `Engine::start` sets the EQ sink to 100% and unmutes it once it exists, and again 250 ms later in case the
+  restore lands late (`routing::reset_sink_volume`). It only touches the app's own sink. `state.restore-props = false` in the
+  node properties does nothing on WirePlumber 0.4.17 (a node property arrives as the string "false"; only a WirePlumber rule
+  gives the boolean), and neither `channelmix.disable` nor `audioconvert.volume` makes the sink ignore its volume.
+- Second fix, the real one: the EQ is no longer the default output. With it as the default the volume keys acted on it, which
+  stayed capped at 100% (Cinnamon's amplified volume is off), so volume-up did nothing while the app was open and volume-down
+  stacked on the speaker level. Now the default stays the real output and `routing::StreamRedirect` (a `pactl subscribe`
+  watcher) moves each new playback stream onto the EQ sink as it appears; `move_streams` at start-up and quit does the rest.
+  If the chosen output is not the system default, the default is set to it while the app runs and put back on quit.
+- Checks (all against the real PipeWire): `cargo test --release sink_starts_at_unity -- --ignored` leaves the sink at 80% and
+  restarts the engine, expecting 100% (fails with `Some("80%")` without the reset). `new_streams_follow_the_eq` starts a
+  silent player on the real output explicitly and expects it on the EQ sink within 3 s while the default does not change:
+  49 ms with the watcher, never without it. (A first version passed without the watcher because WirePlumber's `restore-target`
+  puts a player it saw being moved straight onto the EQ sink; the explicit device avoids that.) The real app was run for 12 s
+  with Spotify and two silent players: default and speaker volume unchanged, EQ sink at 100%, all three streams on the EQ,
+  one started after the app included, and back on the speakers on quit, with no engine or watcher left. If the engine dies,
+  its streams fall back to the default output by themselves.
+- Not done / not verified: a new stream plays on the real output until it is moved, 49 ms in the test; not listened for, and a
+  stream that starts loudly at its first sample could be heard for that moment. Streams you had sent to another device are moved
+  too, as before. The level was read from the sinks and a recorded tone, not heard on this machine.

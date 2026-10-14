@@ -1,4 +1,4 @@
-//! Owns the EQ engine, the analyzer and the default-sink routing.
+//! Owns the EQ engine, the analyzer and the stream routing.
 
 use crate::analyzer::{Analyzer, Dsp, Levels, Onset, Shared, WAVE_CAP};
 use crate::bands;
@@ -23,7 +23,10 @@ pub struct Audio {
     engine: Option<Engine>,
     analyzer: Option<Analyzer>,
     rx: Option<Receiver<(String, Result<Engine, String>)>>,
+    redirect: Option<routing::StreamRedirect>,
     orig_default: Option<String>,
+    /// Set when the chosen output was not the system default, so the volume keys follow it; put back on quit.
+    default_changed: bool,
     pub real_sink: Option<String>,
     pub ready: bool,
     pub status: String,
@@ -48,7 +51,9 @@ impl Audio {
             engine: None,
             analyzer: None,
             rx: None,
+            redirect: None,
             orig_default: current,
+            default_changed: false,
             real_sink: target.clone(),
             ready: false,
             status: String::new(),
@@ -105,7 +110,9 @@ impl Audio {
             engine: None,
             analyzer: None,
             rx: None,
+            redirect: None,
             orig_default: None,
+            default_changed: false,
             real_sink: None,
             ready: false,
             status: format!("Synthetic audio ({}); EQ engine off", fx.name()),
@@ -181,7 +188,12 @@ impl Audio {
                         self.engine = Some(engine);
                         self.ready = true;
                         self.status.clear();
-                        routing::set_default_sink(VIRTUAL_SINK);
+                        // The default output stays the real one (unless another was chosen) so the volume keys keep
+                        // controlling it; streams are sent to the EQ sink as they appear, watcher first so none slips by.
+                        if routing::default_sink().as_deref() != Some(&target) {
+                            self.default_changed = routing::set_default_sink(&target);
+                        }
+                        self.redirect = routing::StreamRedirect::start(VIRTUAL_SINK);
                         routing::move_streams(None, VIRTUAL_SINK);
                     }
                     Err(e) => self.status = format!("EQ engine unavailable ({e}). Showing the analyzer only."),
@@ -194,9 +206,7 @@ impl Audio {
             if !self.engine.as_mut().map_or(false, |e| e.running()) {
                 self.ready = false;
                 self.engine = None;
-                if let Some(s) = self.real_sink.clone() {
-                    routing::set_default_sink(&s);
-                }
+                self.redirect = None; // the EQ sink is gone, so its streams fall back to the default output
                 self.status = "The EQ engine stopped unexpectedly. Audio is back on your normal output.".into();
                 self.retarget();
             }
@@ -221,6 +231,7 @@ impl Audio {
         if self.synth.is_some() || self.real_sink.as_deref() == Some(&name) {
             return;
         }
+        self.redirect = None;
         self.engine = None;
         self.analyzer = None;
         self.ready = false;
@@ -258,10 +269,13 @@ impl Audio {
             stop.store(true, Ordering::Relaxed);
         }
         self.analyzer = None;
+        self.redirect = None;
         if self.ready {
             if let Some(t) = self.real_sink.clone().or_else(|| self.orig_default.clone()) {
-                routing::set_default_sink(&t);
                 routing::move_streams(Some(VIRTUAL_SINK), &t);
+            }
+            if let Some(d) = self.orig_default.as_deref().filter(|_| self.default_changed) {
+                routing::set_default_sink(d);
             }
         }
         self.engine = None;

@@ -30,6 +30,8 @@ Needs only: Python 3, PyGObject (GTK 3, GStreamer, `gst-plugins-good`), pycairo,
 
 `gpu/` is a ground-up Rust port with a GPU-rendered display. It does everything the Python app does
 (same EQ engine, routing, presets); settings live in `~/.config/graphic-eq/gpu-settings.json`.
+It does not make the virtual output the default: your default output, and so the volume keys and the
+system volume, stay where they are, and each playback stream is moved onto the EQ as it appears (and back on quit).
 
     cd gpu && cargo run --release
 

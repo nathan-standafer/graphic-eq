@@ -1,7 +1,7 @@
 //! The equalizer itself: a PipeWire filter-chain exposed as a virtual sink ("Graphic EQ").
 //! Gains are changed live with pw-cli; slider drags coalesce into few calls.
 
-use crate::{bands, routing::VIRTUAL_SINK};
+use crate::{bands, routing, routing::VIRTUAL_SINK};
 use serde_json::Value;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
@@ -90,6 +90,13 @@ impl Engine {
             }
             std::thread::sleep(Duration::from_millis(150));
         };
+        // WirePlumber restores the sink's last-saved volume as it appears (the volume keys change it while it is the
+        // default sink, and that gets saved). It stacks on the real output's own volume, so the EQ would come up
+        // quieter than the bare output with every band at 0 dB. The real output keeps the level; this sink stays at unity.
+        // Twice, in case WirePlumber's restore lands after the first.
+        routing::reset_sink_volume(VIRTUAL_SINK);
+        std::thread::sleep(Duration::from_millis(250));
+        routing::reset_sink_volume(VIRTUAL_SINK);
         let (tx, rx) = mpsc::channel::<[f32; bands::COUNT]>();
         std::thread::spawn(move || {
             while let Ok(mut gains) = rx.recv() {
@@ -126,5 +133,88 @@ impl Drop for Engine {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sink_volume_percent(name: &str) -> Option<String> {
+        let out = Command::new("pactl").args(["--format=json", "list", "sinks"]).output().ok()?;
+        let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+        let s = v.as_array()?.iter().find(|s| s["name"] == name)?;
+        s["volume"]["front-left"]["value_percent"].as_str().map(str::to_string)
+    }
+
+    /// Unloads the null sink and stops the player however the test ends.
+    struct Cleanup(String, Option<Child>);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            if let Some(c) = &mut self.1 {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            let _ = Command::new("pactl").args(["unload-module", &self.0]).status();
+        }
+    }
+
+    /// Needs a running PipeWire. Plays to a silent null sink only. A new stream must end up on the EQ sink while the
+    /// system default output stays exactly where it was: `cargo test --release new_streams_follow_the_eq -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn new_streams_follow_the_eq() {
+        let before = routing::default_sink().expect("a default sink");
+        let m = Command::new("pactl").args(["load-module", "module-null-sink", "sink_name=geq_test_null"]).output().expect("pactl");
+        let mut guard = Cleanup(String::from_utf8_lossy(&m.stdout).trim().to_string(), None);
+        let _engine = Engine::start("geq_test_null").expect("engine");
+        let _redirect = routing::StreamRedirect::start(VIRTUAL_SINK).expect("redirect");
+        // 4 s of silence, 48 kHz stereo 16 bit
+        let data = 48000 * 4 * 4;
+        let mut wav = b"RIFF".to_vec();
+        for chunk in [&(36 + data as u32).to_le_bytes()[..], b"WAVEfmt ", &16u32.to_le_bytes(), &1u16.to_le_bytes(), &2u16.to_le_bytes(),
+            &48000u32.to_le_bytes(), &(48000u32 * 4).to_le_bytes(), &4u16.to_le_bytes(), &16u16.to_le_bytes(), b"data", &(data as u32).to_le_bytes()] {
+            wav.extend_from_slice(chunk);
+        }
+        wav.resize(wav.len() + data, 0);
+        let path = std::env::temp_dir().join("geq-test-silence.wav");
+        std::fs::write(&path, wav).unwrap();
+        let t0 = Instant::now();
+        // Explicit device: WirePlumber would otherwise put a player it saw being moved before straight onto the EQ sink.
+        guard.1 = Some(Command::new("paplay").args(["--client-name=geq-test", "--device", &before]).arg(&path).spawn().expect("paplay"));
+        let sink_of_player = || -> Option<String> {
+            let sinks: Value = serde_json::from_slice(&Command::new("pactl").args(["--format=json", "list", "sinks"]).output().ok()?.stdout).ok()?;
+            let inputs: Value = serde_json::from_slice(&Command::new("pactl").args(["--format=json", "list", "sink-inputs"]).output().ok()?.stdout).ok()?;
+            let i = inputs.as_array()?.iter().find(|i| i["properties"]["application.name"] == "geq-test")?;
+            sinks.as_array()?.iter().find(|s| s["index"] == i["sink"]).and_then(|s| s["name"].as_str().map(str::to_string))
+        };
+        let mut on = None;
+        while t0.elapsed() < Duration::from_secs(3) {
+            on = sink_of_player();
+            if on.as_deref() == Some(VIRTUAL_SINK) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        println!("stream reached {:?} after {:?}", on, t0.elapsed());
+        assert_eq!(on.as_deref(), Some(VIRTUAL_SINK));
+        assert_eq!(routing::default_sink().as_deref(), Some(before.as_str()), "the default output must not change");
+    }
+
+    /// Needs a running PipeWire. WirePlumber restores the sink's last-saved volume, so leave it at 80% once and
+    /// check that the next engine still starts at unity: `cargo test --release sink_starts_at_unity -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn sink_starts_at_unity() {
+        let target = routing::default_sink().filter(|s| !s.starts_with("geq_")).expect("a real default sink");
+        {
+            let _e = Engine::start(&target).expect("engine");
+            assert_eq!(sink_volume_percent(VIRTUAL_SINK).as_deref(), Some("100%"));
+            let _ = Command::new("pactl").args(["set-sink-volume", VIRTUAL_SINK, "80%"]).status();
+            std::thread::sleep(Duration::from_millis(2500)); // WirePlumber saves ~1 s after a change
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        let _e = Engine::start(&target).expect("engine");
+        assert_eq!(sink_volume_percent(VIRTUAL_SINK).as_deref(), Some("100%"));
     }
 }
