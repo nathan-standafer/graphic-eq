@@ -2,7 +2,7 @@
 //! scene. They are separate from the EQ presets and never touch gains, bypass or routing.
 
 use crate::render::BLOOM_LEVELS;
-use crate::scenes::{COLUMNS, FOUNTAIN, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
+use crate::scenes::{AURORA, CHLADNI, COLUMNS, FERROFLUID, FOUNTAIN, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
 
 /// Idle camera path amplitudes at Motion = 1: yaw, pitch (radians), dolly (fraction), roll (radians).
 #[derive(Clone, Copy)]
@@ -38,8 +38,15 @@ const SCOPE_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
 const FOUNTAIN_IDLE: Idle = Idle { yaw: 0.07, pitch: 0.02, zoom: 0.04, roll: 0.0 };
 /// The smoke is a flat picture with no camera.
 const SMOKE_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
+/// The plates are a flat picture too.
+const SAND_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
+/// The orb is round, so a slow turn about it only slides the reflections; the pitch and dolly stay small.
+const ORB_IDLE: Idle = Idle { yaw: 0.10, pitch: 0.025, zoom: 0.04, roll: 0.0 };
 
-pub const LOOKS: [Look; 22] = [
+/// The aurora is seen from a fixed spot at the water's edge: the idle path only sways the view a few degrees.
+const AURORA_IDLE: Idle = Idle { yaw: 0.03, pitch: 0.010, zoom: 0.02, roll: 0.0 };
+
+pub const LOOKS: [Look; 34] = [
     // ---- columns
     Look {
         scene: COLUMNS, name: "Studio", theme: 0, exposure: 1.0,
@@ -156,6 +163,74 @@ pub const LOOKS: [Look; 22] = [
         scene: SMOKE, name: "Prism Plumes", theme: 4, exposure: 0.9,
         bloom: [0.24, 0.32, 0.30, 0.22, 0.14, 0.08], threshold: 0.9, knee: 0.5, vignette: 0.5,
         motion: 0.6, flash: 0.7, idle: SMOKE_IDLE,
+    },
+    // ---- chladni sand: fine nodal lines have to survive, so the halo is tight and the broad glow nearly absent
+    // (Motion is how hard a hit shakes the plates and how far the lamp drifts)
+    Look {
+        scene: CHLADNI, name: "Moonlit Sand", theme: 2, exposure: 1.0,
+        bloom: [0.26, 0.28, 0.18, 0.09, 0.05, 0.03], threshold: 1.0, knee: 0.5, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: SAND_IDLE,
+    },
+    Look {
+        scene: CHLADNI, name: "Amber Dust", theme: 1, exposure: 1.0,
+        bloom: [0.26, 0.28, 0.20, 0.10, 0.06, 0.03], threshold: 0.95, knee: 0.5, vignette: 0.6,
+        motion: 0.6, flash: 0.8, idle: SAND_IDLE,
+    },
+    Look {
+        scene: CHLADNI, name: "Neon Grit", theme: 3, exposure: 0.95,
+        bloom: [0.26, 0.30, 0.20, 0.10, 0.06, 0.03], threshold: 1.0, knee: 0.5, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: SAND_IDLE,
+    },
+    Look {
+        scene: CHLADNI, name: "Prism Sand", theme: 4, exposure: 0.9,
+        bloom: [0.24, 0.28, 0.18, 0.09, 0.05, 0.03], threshold: 1.0, knee: 0.5, vignette: 0.5,
+        motion: 0.6, flash: 0.7, idle: SAND_IDLE,
+    },
+    // ---- ferrofluid orb: a black mirror, so the halo is tight and the broad glow faint; only the brightest cores of
+    // the strip lights and the tips of the tallest spikes may bloom (Motion is how elastic the fluid is, Flash the
+    // light pulses and tip glow)
+    Look {
+        scene: FERROFLUID, name: "Obsidian Ice", theme: 2, exposure: 1.0,
+        bloom: [0.20, 0.22, 0.16, 0.10, 0.06, 0.04], threshold: 1.1, knee: 0.5, vignette: 0.55,
+        motion: 0.6, flash: 0.7, idle: ORB_IDLE,
+    },
+    Look {
+        scene: FERROFLUID, name: "Ember Core", theme: 1, exposure: 1.0,
+        bloom: [0.20, 0.24, 0.18, 0.11, 0.07, 0.04], threshold: 1.05, knee: 0.5, vignette: 0.6,
+        motion: 0.6, flash: 0.7, idle: ORB_IDLE,
+    },
+    Look {
+        scene: FERROFLUID, name: "Neon Magnet", theme: 3, exposure: 0.95,
+        bloom: [0.22, 0.26, 0.18, 0.11, 0.07, 0.04], threshold: 1.1, knee: 0.5, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: ORB_IDLE,
+    },
+    Look {
+        scene: FERROFLUID, name: "Prism Oil", theme: 4, exposure: 0.9,
+        bloom: [0.20, 0.22, 0.16, 0.10, 0.06, 0.04], threshold: 1.1, knee: 0.5, vignette: 0.5,
+        motion: 0.6, flash: 0.7, idle: ORB_IDLE,
+    },
+    // ---- aurora: soft light, so the halo is wide and the broad glow generous; the sharp lower edges are the only
+    // thing bright enough to bloom hard (Motion is how much the curtains fold and drift, Flash the highlights that
+    // run up the rays)
+    Look {
+        scene: AURORA, name: "Boreal Green", theme: 0, exposure: 1.0,
+        bloom: [0.18, 0.26, 0.30, 0.26, 0.18, 0.12], threshold: 0.7, knee: 0.6, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: AURORA_IDLE,
+    },
+    Look {
+        scene: AURORA, name: "Polar Ice", theme: 2, exposure: 1.0,
+        bloom: [0.18, 0.26, 0.30, 0.26, 0.18, 0.12], threshold: 0.7, knee: 0.6, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: AURORA_IDLE,
+    },
+    Look {
+        scene: AURORA, name: "Neon Veil", theme: 3, exposure: 0.95,
+        bloom: [0.20, 0.28, 0.30, 0.26, 0.18, 0.12], threshold: 0.7, knee: 0.6, vignette: 0.55,
+        motion: 0.6, flash: 0.8, idle: AURORA_IDLE,
+    },
+    Look {
+        scene: AURORA, name: "Prism Curtains", theme: 4, exposure: 0.9,
+        bloom: [0.18, 0.24, 0.28, 0.24, 0.16, 0.10], threshold: 0.75, knee: 0.6, vignette: 0.5,
+        motion: 0.6, flash: 0.7, idle: AURORA_IDLE,
     },
 ];
 

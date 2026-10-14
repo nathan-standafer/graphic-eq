@@ -116,6 +116,8 @@ pub struct App {
     modn: Modulation,
     sig: Signals,
     levels_f: [f32; 11],
+    /// The 192-point spectrum as displayed (0..1), for the ferrofluid orb's spikes.
+    spectrum_f: [f32; CURVE_POINTS],
     peaks_f: [f32; 11],
     /// Peak-cap pushes (see `modulation::PeakHits`) and the bursts due this frame.
     peak_tracker: PeakHits,
@@ -224,6 +226,15 @@ impl App {
         if let Ok(v) = std::env::var("GEQ_DENSITY") {
             cfg.density = v.parse().unwrap_or(cfg.density);
         }
+        if let Ok(v) = std::env::var("GEQ_GRAINS") {
+            cfg.sand_grains = v.parse().unwrap_or(cfg.sand_grains);
+        }
+        if let Ok(v) = std::env::var("GEQ_SPIKES") {
+            cfg.orb_spikes = v.parse().unwrap_or(cfg.orb_spikes);
+        }
+        if let Ok(v) = std::env::var("GEQ_CURTAINS") {
+            cfg.aurora_curtains = v.parse().unwrap_or(cfg.aurora_curtains);
+        }
         if std::env::var("GEQ_SPARKS").map_or(false, |v| v == "0") {
             cfg.sparks = false;
         }
@@ -258,6 +269,7 @@ impl App {
             modn: Modulation::new(),
             sig: blank_signals(),
             levels_f: [0.0; 11],
+            spectrum_f: [0.0; CURVE_POINTS],
             peaks_f: [0.0; 11],
             peak_tracker: PeakHits::new(),
             peak_hits: [0.0; 11],
@@ -346,6 +358,9 @@ impl App {
         smooth(&mut self.curve_l, &lv.curve_l);
         smooth(&mut self.curve_r, &lv.curve_r);
         self.rise = self.rise_norm.update(&lv.rise, dt);
+        for k in 0..CURVE_POINTS {
+            self.spectrum_f[k] = self.frac(self.curve[k]);
+        }
         for i in 0..11 {
             self.levels_f[i] = self.frac(self.disp[i]);
             self.peaks_f[i] = if self.cfg.peak_caps { self.frac(self.peak[i]) } else { 0.0 };
@@ -483,6 +498,11 @@ impl App {
             peak_hits: self.peak_hits,
             smoke: self.cfg.smoke_density,
             nozzle_x: self.nozzle_x,
+            grains: self.cfg.sand_grains,
+            spikes: self.cfg.orb_spikes,
+            curtains: self.cfg.aurora_curtains,
+            spectrum: self.spectrum_f,
+            rise: self.rise,
         }
     }
 
@@ -1265,6 +1285,27 @@ impl App {
                             .on_hover_text("How much smoke each jet blows. Lower gives delicate wisps, higher dense plumes.")
                             .changed();
                     }
+                    Control::SandGrains => {
+                        ui.label(RichText::new("SAND").small().weak());
+                        touched |= ui
+                            .add(egui::Slider::new(&mut self.cfg.sand_grains, 0.25..=1.5).text("grains"))
+                            .on_hover_text("How much sand lies on the plates. Less gives thin, delicate lines; more gives bold ones.")
+                            .changed();
+                    }
+                    Control::OrbSpikes => {
+                        ui.label(RichText::new("FLUID").small().weak());
+                        touched |= ui
+                            .add(egui::Slider::new(&mut self.cfg.orb_spikes, 0.3..=1.5).text("spikes"))
+                            .on_hover_text("How tall the spikes stand. Lower gives a smooth, lobed blob; higher a hedgehog.")
+                            .changed();
+                    }
+                    Control::AuroraCurtains => {
+                        ui.label(RichText::new("AURORA").small().weak());
+                        touched |= ui
+                            .add(egui::Slider::new(&mut self.cfg.aurora_curtains, 2..=6).text("curtains"))
+                            .on_hover_text("The most curtains standing in the sky. A narrower picture shows fewer of them anyway; fewer curtains are quieter and cheaper.")
+                            .changed();
+                    }
                     Control::ScopePersistence => {
                         ui.label(RichText::new("PERSISTENCE").small().weak());
                         touched |= ui
@@ -1284,13 +1325,19 @@ impl App {
                 ui.label("Motion");
                 let motion_tip = if self.cfg.scene == scenes::SMOKE {
                     "Turbulence: how much the plumes wobble and roll up. 0 gives smooth, straight columns."
+                } else if self.cfg.scene == scenes::CHLADNI {
+                    "How hard a hit shakes the plates, and how far the lamp drifts over the sand. 0 gives a fixed lamp and sand that only follows the loudness."
+                } else if self.cfg.scene == scenes::AURORA {
+                    "How much the curtains fold and drift, how the lake stirs, and how far the camera wanders. 0 holds the folds still (the columns still follow the music)."
+                } else if self.cfg.scene == scenes::FERROFLUID {
+                    "How elastic the fluid is: spikes thrown out by a hit, wobbling lobes, breathing, and how fast the lights drift around it. 0 gives a fluid that only follows the loudness, in still light."
                 } else {
                     "Camera drift, banking and wall breathing. 0 holds everything still."
                 };
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.motion, 0.0..=1.5)).on_hover_text(motion_tip).changed();
                 ui.end_row();
                 ui.label("Flash");
-                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses (puffs from the smoke jets). 0 turns them off.").changed();
+                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses (puffs from the smoke jets, the glow of sand on a hit, the lights and tip glow of the ferrofluid orb, the highlights that run up the aurora's rays). 0 turns them off.").changed();
                 ui.end_row();
                 ui.label("Glow");
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.bloom, 0.0..=2.0)).changed();

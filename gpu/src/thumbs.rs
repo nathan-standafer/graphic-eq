@@ -4,7 +4,7 @@
 use eframe::egui;
 
 /// In `presets::LOOKS` order.
-const DATA: [&[u8]; 22] = [
+const DATA: [&[u8]; 34] = [
     include_bytes!("../assets/thumbs/0-studio.png"),
     include_bytes!("../assets/thumbs/0-amber-rack.png"),
     include_bytes!("../assets/thumbs/0-ice-deck.png"),
@@ -27,6 +27,18 @@ const DATA: [&[u8]; 22] = [
     include_bytes!("../assets/thumbs/5-ember-smoke.png"),
     include_bytes!("../assets/thumbs/5-neon-haze.png"),
     include_bytes!("../assets/thumbs/5-prism-plumes.png"),
+    include_bytes!("../assets/thumbs/6-moonlit-sand.png"),
+    include_bytes!("../assets/thumbs/6-amber-dust.png"),
+    include_bytes!("../assets/thumbs/6-neon-grit.png"),
+    include_bytes!("../assets/thumbs/6-prism-sand.png"),
+    include_bytes!("../assets/thumbs/7-obsidian-ice.png"),
+    include_bytes!("../assets/thumbs/7-ember-core.png"),
+    include_bytes!("../assets/thumbs/7-neon-magnet.png"),
+    include_bytes!("../assets/thumbs/7-prism-oil.png"),
+    include_bytes!("../assets/thumbs/8-boreal-green.png"),
+    include_bytes!("../assets/thumbs/8-polar-ice.png"),
+    include_bytes!("../assets/thumbs/8-neon-veil.png"),
+    include_bytes!("../assets/thumbs/8-prism-curtains.png"),
 ];
 
 #[derive(Default)]

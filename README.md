@@ -78,6 +78,41 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   and clears when the music stops. Display menu: **thickness** (delicate wisps to dense plumes); **Motion**
   is turbulence here (0 gives smooth, straight columns) and **Flash** scales the puffs.
 
+- **Chladni Sand** - three vibrating metal plates side by side (lows, mids, highs; one plate on a window too
+  narrow for three) covered in about half a million grains of sand. Each plate vibrates in the modes of its
+  strongest bands (higher bands, finer figures), and the sand is thrown about wherever the plate moves and
+  settles on the lines that stay still, drawing the classic Chladni figures. When the music changes the figure
+  dissolves and a new one forms; in silence the last one stays standing. A hit shakes the plate and lifts the
+  sand off its lines for a moment, and a lamp that drifts slowly over the plates makes grains glint. A strip
+  of lamps under each plate shows how hard it is vibrating. Display menu: **grains** (thin delicate lines to
+  bold ones); **Motion** is how hard a hit shakes the plates and how far the lamp drifts, **Flash** is the
+  glow of the sand on a hit.
+
+- **Ferrofluid Orb** - a glossy black sphere floating over a polished floor, with broad elastic lobes under
+  192 fine spikes. The spikes sit on a spiral from the bottom of the sphere to the top, one per frequency of the
+  spectrum, so a rising sweep climbs the orb; each is a spring that its frequency's level pulls up and that a hit
+  throws out and lets settle. Eleven soft lobes, one per EQ band, bulge with their band's level (the volume stays
+  constant: a louder band swells while a quieter one sinks) and wobble on onsets, and sustained bass makes the whole
+  orb breathe. The surface is a black mirror: what it shows is a studio of strip lights in the theme's colours (a
+  long one overhead, two tall ones at the sides, two behind it for the rim) that slowly drifts around it. The floor
+  mirrors the orb and carries the ring of eleven LEDs it floats over (bass at the left, filling with each band's
+  level); bass hits send a ripple out from the ring. In silence the spikes retract and it settles into a calm glass
+  ball. Display menu: **spikes** (a smooth lobed blob to a hedgehog); **Motion** is how elastic the fluid is (spikes
+  thrown out by hits, wobbling lobes, breathing, the lights' drift; 0 gives a fluid that only follows the loudness
+  in still light), **Flash** is the pulse of the lights and the glow of the spike tips.
+
+- **Aurora** - broad translucent curtains of light standing over a dark lake, under stars and behind a low
+  treeline. Six vertical sheets (fewer on a narrower picture: five at 21:9, four at 16:9) stand at different
+  distances; screen x is frequency on every one (bass at the left). The nearest shows the newest spectrum and
+  each farther one a little older, so a hit appears near and echoes back into the distance. Each column's height
+  follows its frequency's level, the mids fold the sheets in depth (a fold turned edge-on to you shows as a bright
+  pleat), the sharp lower edges burn brightest, and a hit runs a small highlight up the rays where its energy
+  was. The slow energy trend spreads the stack apart; in silence the curtains settle to thin, dim lines. The lake
+  mirrors the sky and ripples with the bass. The curtains are drawn at half resolution (about 0.4 ms at 5120x1440)
+  and the stars, treeline and lake at full resolution. Display menu: **curtains** (the most standing in the sky,
+  2-6); **Motion** is how much the curtains fold and drift and how the lake stirs (0 holds the folds still; the
+  columns still follow the music), **Flash** is the highlights that run up the rays.
+
 **Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
 (your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip
 appears on mouse movement and fades after a few seconds. Display menu: looks, colors, **Motion**
@@ -103,6 +138,8 @@ audio: no EQ engine, no routing changes, settings are read-only.
 `GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor),
 `GEQ_GRADIENT=n` (fountain spark sensitivity), `GEQ_DENSITY=n` (fountain particle density), `GEQ_SPARKS=0` (columns without sparks),
 `GEQ_SMOKE_ITERS=n` (pressure iterations of the smoke solver, default 18; it changes how tall the plumes stand),
+`GEQ_GRAINS=n` (how much sand lies on the Chladni plates, 0.25-1.5), `GEQ_SPIKES=n` (spike height of the ferrofluid orb, 0.3-1.5),
+`GEQ_CURTAINS=n` (most curtains of the aurora, 2-6), `GEQ_AURORA_SCALE=n` (the aurora's render scale, 0.25-1; default 0.5), `GEQ_SANDDEBUG=1` (once a second: which bands vibrate each plate),
 `GEQ_CYCLE=secs` (auto-cycle scenes), `GEQ_LATENCY=1` (onset delivery delay), `GEQ_BROWSER=1`,
 `GEQ_VIEW=scene|bloom|nan` (composite debug views). `tools/make-thumbs.sh` regenerates the look
 thumbnails from real captures. `cargo test` covers the synthetic source, onset detection, and the

@@ -242,7 +242,14 @@ impl Gpu {
     /// if anything was built. The caller keeps showing the current scene until this has run.
     pub fn prepare_scene(&mut self, device: &wgpu::Device, id: u32) -> Option<f32> {
         let ctx = Ctx { device, layout: &self.scene_layout, bgl: &self.scene_bgl };
-        self.mgr.ensure(id, &ctx, &self.scene_bgl, &self.hist_view)
+        let built = self.mgr.ensure(id, &ctx, &self.scene_bgl, &self.hist_view);
+        // a scene built after the targets exist gets its size now, so it allocates what depends on it before its first frame
+        if built.is_some() {
+            if let (Some(t), Some(s)) = (&self.targets, self.mgr.get_mut(id)) {
+                s.scene.resize(device, t.size);
+            }
+        }
+        built
     }
 
     /// Restore a scene to a deterministic initial state.

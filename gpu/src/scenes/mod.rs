@@ -2,15 +2,19 @@
 //! `common.wgsl`) and draws into the shared HDR scene pass. The compositor in `render.rs` owns the
 //! targets, transitions, bloom and tone mapping, so scenes only describe what to draw.
 
+use crate::analyzer::CURVE_POINTS;
 use crate::render::{HIST_W, SCENE_FMT};
 use bytemuck::{Pod, Zeroable};
 use eframe::wgpu;
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 
+pub mod aurora;
 pub mod columns;
+pub mod ferro;
 pub mod fountain;
 pub mod particles;
+pub mod sand;
 pub mod smoke;
 pub mod sparks;
 pub mod tunnel;
@@ -24,7 +28,10 @@ pub const TUNNEL: u32 = 2;
 pub const VECTORSCOPE: u32 = 3;
 pub const FOUNTAIN: u32 = 4;
 pub const SMOKE: u32 = 5;
-pub const ALL: [u32; 6] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE];
+pub const CHLADNI: u32 = 6;
+pub const FERROFLUID: u32 = 7;
+pub const AURORA: u32 = 8;
+pub const ALL: [u32; 9] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE, CHLADNI, FERROFLUID, AURORA];
 
 pub const DEPTH_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const MSAA: u32 = 4;
@@ -118,6 +125,51 @@ pub struct SceneParams {
     /// Where each EQ band's slider stands across the scene, as a fraction of its width (the smoke nozzles
     /// stand over them in windowed mode).
     pub nozzle_x: [f32; 11],
+    /// How much sand lies on the Chladni plates (1 = designed).
+    pub grains: f32,
+    /// How tall the ferrofluid orb's spikes stand (1 = designed).
+    pub spikes: f32,
+    /// Most curtains the aurora may show (the picture's shape can allow fewer).
+    pub curtains: u32,
+    /// The 192-point spectrum as displayed (0..1, after range and sensitivity), and how steeply each point is
+    /// rising now, relative to the music's own hardest recent hits (about 1 at those).
+    pub spectrum: [f32; CURVE_POINTS],
+    pub rise: [f32; CURVE_POINTS],
+}
+
+#[cfg(test)]
+impl SceneParams {
+    /// Silent, flat parameters for unit tests: a theme, the gate open, and nothing happening.
+    pub fn for_tests() -> SceneParams {
+        SceneParams {
+            time: 0.0,
+            mode: 0,
+            theme: 2,
+            exposure: 1.0,
+            flash: 0.8,
+            motion: 0.6,
+            gate: 1.0,
+            levels: [0.0; 11],
+            peaks: [0.0; 11],
+            fx: [0.0; 4],
+            sus: [0.0; 4],
+            rings: [[0.0; 4]; 8],
+            cam: CamState::default(),
+            row_frac: 0.0,
+            persist: 0.25,
+            sparks: true,
+            density: 1.0,
+            gradient: 1.0,
+            peak_hits: [0.0; 11],
+            smoke: 1.0,
+            nozzle_x: std::array::from_fn(|i| (i as f32 + 0.5) / 11.0),
+            grains: 1.0,
+            spikes: 1.0,
+            curtains: 6,
+            spectrum: [0.0; CURVE_POINTS],
+            rise: [0.0; CURVE_POINTS],
+        }
+    }
 }
 
 /// What `update` and `draw` see besides the pipeline state: the frame's parameters and target size.
@@ -166,6 +218,12 @@ pub enum Control {
     Gradient,
     /// How thick the smoke jets blow.
     SmokeThickness,
+    /// How much sand lies on the Chladni plates.
+    SandGrains,
+    /// How tall the ferrofluid orb's spikes stand.
+    OrbSpikes,
+    /// How many curtains the aurora shows.
+    AuroraCurtains,
 }
 
 pub struct SceneInfo {
@@ -178,7 +236,7 @@ pub struct SceneInfo {
     pub cost_ms: f32,
 }
 
-const INFOS: [SceneInfo; 6] = [
+const INFOS: [SceneInfo; 9] = [
     SceneInfo {
         id: COLUMNS,
         name: "3D columns",
@@ -221,6 +279,29 @@ const INFOS: [SceneInfo; 6] = [
         // a flat picture: the camera does not move
         cam: CamLimits { yaw: 0.0, pitch: (0.0, 0.0), zoom: (1.0, 1.0) },
         controls: &[Control::SmokeThickness],
+        cost_ms: 1.8,
+    },
+    SceneInfo {
+        id: CHLADNI,
+        name: "Chladni Sand",
+        // a flat picture: the camera does not move
+        cam: CamLimits { yaw: 0.0, pitch: (0.0, 0.0), zoom: (1.0, 1.0) },
+        controls: &[Control::SandGrains],
+        cost_ms: 1.9,
+    },
+    SceneInfo {
+        id: FERROFLUID,
+        name: "Ferrofluid Orb",
+        cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.5, 2.0) },
+        controls: &[Control::OrbSpikes],
+        cost_ms: 1.8,
+    },
+    SceneInfo {
+        id: AURORA,
+        name: "Aurora",
+        // shallow: the camera stands at the water's edge and may only turn and zoom a little
+        cam: CamLimits { yaw: 0.09, pitch: (-0.05, 0.05), zoom: (0.85, 1.2) },
+        controls: &[Control::AuroraCurtains],
         cost_ms: 1.8,
     },
 ];
@@ -298,6 +379,11 @@ impl<'a> Ctx<'a> {
 
     /// Like `pipeline`, for a scene with extra bind groups after group 0.
     pub fn pipeline_with(&self, layout: &wgpu::PipelineLayout, sh: &wgpu::ShaderModule, label: &str, vs: &str, fs: &str, o: Pipe) -> wgpu::RenderPipeline {
+        self.pipeline_cull(layout, sh, label, vs, fs, o, None)
+    }
+
+    /// Like `pipeline_with`, dropping triangles that face `cull` (front faces are counter-clockwise).
+    pub fn pipeline_cull(&self, layout: &wgpu::PipelineLayout, sh: &wgpu::ShaderModule, label: &str, vs: &str, fs: &str, o: Pipe, cull: Option<wgpu::Face>) -> wgpu::RenderPipeline {
         self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(layout),
@@ -308,7 +394,7 @@ impl<'a> Ctx<'a> {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState { format: SCENE_FMT, blend: o.blend, write_mask: wgpu::ColorWrites::ALL })],
             }),
-            primitive: wgpu::PrimitiveState::default(),
+            primitive: wgpu::PrimitiveState { cull_mode: cull, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FMT,
                 depth_write_enabled: Some(o.depth_write),
@@ -330,6 +416,9 @@ fn create(id: u32, ctx: &Ctx) -> Box<dyn Scene> {
         VECTORSCOPE => Box::new(vectorscope::Vectorscope::new(ctx)),
         FOUNTAIN => Box::new(fountain::Fountain::new(ctx)),
         SMOKE => Box::new(smoke::Smoke::new(ctx)),
+        CHLADNI => Box::new(sand::Sand::new(ctx)),
+        FERROFLUID => Box::new(ferro::Ferrofluid::new(ctx)),
+        AURORA => Box::new(aurora::Aurora::new(ctx)),
         _ => Box::new(columns::Columns::new(ctx)),
     }
 }

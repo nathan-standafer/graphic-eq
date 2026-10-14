@@ -454,6 +454,8 @@ displaced mesh; precompute local site indices/weights or reduce update frequency
 
 ### 9. Aurora — M prototype, scope set by measurement
 
+*Built, and promoted past the prototype gate: see Milestone 7 (ID 8). The text below is the original brief.*
+
 Broad translucent curtains of light span the display, their height and folds following the spectrum
 and trailing back through history. This is an early composition experiment alongside the Smoke
 cost prototype, not a commitment to 24–32 full-width layers.
@@ -920,6 +922,293 @@ smoke run, before MacCormack, had p99 9.2 ms.
 
 **Not done yet**: a quality setting for the grid and iteration count (the cost is low enough to leave at 1.45 ms),
 a render scale for the shading pass, and tuning on real music.
+
+## Milestone 5: Chladni Sand (scene 7 in the table, ID 6)
+
+Three plates of sand that draw the classic figures. IDs: 6 = Chladni Sand.
+
+**Shipped**
+
+- `scenes/sand.rs` (layout, mode selection, drive, the scene; unit-tested), `sand_common.wgsl` (the uniform block
+  and the plate's vibration pattern), `sand_sim.wgsl` (compute) and `sand.wgsl` (the plates). One storage buffer
+  holds 737,280 grains (24 bytes: position on its plate, velocity, the angle of the facet that catches the lamp, a
+  tone); they are never born or killed. 163,840 per plate at the designed density, three plates, so about half a
+  million; the Grains setting runs from 0.25 to 1.5 of that, and a smaller plate gets fewer grains in proportion
+  to its area (the same grains per pixel at any size, and a grain's light follows, so a small window is not
+  brighter). Plates are three squares evenly spaced across the width when the picture is at least 2.6:1, one in
+  the middle otherwise (a lone plate is driven by all eleven bands), with whole-pixel geometry.
+- The pattern is `a(x, y) = sum w_i (cos(n_i pi x) cos(m_i pi y) + s_i cos(m_i pi x) cos(n_i pi y))` over four
+  modes per plate. Each EQ band owns a mode (m, n, s), higher bands higher modes: (1,2,+) at 40 Hz up to (6,9,+)
+  at 16 kHz. A plate's modes are four *voices*: the loudest three bands of its group (lows 40-240 Hz, mids 440 Hz-
+  2.7 kHz, highs 4.8-16 kHz) claim a voice, a band already vibrating counts 1.3x louder than it is so a
+  challenger must clearly beat it, a band must be within 55% of the leader to take part, and weights follow
+  `(level / leader)^2` with a 0.30 s rise and a 0.55 s fall. Nothing changes while the signal gate is closed
+  (silence leaves the last figure standing), and a plate whose region has nothing above a displayed level of 0.14
+  keeps its figure instead of reshaping it from noise. Constants are at the top of the section in `sand.rs`.
+- The compute pass kicks each grain with a velocity impulse of `|a|` times the plate's energy (damped, so it hops
+  in short arcs rather than flickering; the noise scales with sqrt(dt), every rate is per second, so 60 and 120 fps
+  agree) and draws it toward the nearest zero of `a` (the Newton step `a grad(a) / (|grad a|^2 + 1)`, capped, and
+  ignored when that zero lies outside the plate). Where the plate is still nothing moves, so sand collects on the
+  nodal lines; when the weights change the old lines start to shake and the sand runs to the new ones. A plate's
+  energy is the sustained level of its region (the normalized `sus` envelope, gated); a hit in that region
+  multiplies the shaking (Motion) and weakens the pull while the sand is airborne, and makes the sand glow
+  (Flash). The scene starts from a figure that is already formed: each grain tries up to 32 random places and keeps
+  the first near a nodal line (the rest are loose grains), so there is no settling period; the pass is spread over
+  four frames after a reset.
+- Rendering: the compute pass adds every grain into a per-pixel density buffer of fixed-point atomics (bilinear
+  over four pixels, two u32 per pixel: the body of the grains and the glints), and each plate pixel turns its sums
+  into light, softly saturating where sand piles up (a crossing of two lines does not burn out). The sand is a
+  pale body in the plate's theme colour (lows, mids and highs take successive hues of the theme; Rainbow follows
+  the plate), plus glints when a grain's facet faces a lamp that drifts slowly (Motion), and a moving grain
+  tumbles so it flashes. The plates are dark brushed metal with a lit rim and a spill of their colour on the dark
+  field, vibration faintly tinting the antinodes, and a strip of 32 lamps under each that fills with the plate's
+  energy and flares on a hit; the strips and rims stay on screen in silence. Non-MSAA.
+- Four looks (Moonlit Sand, Amber Dust, Neon Grit, Prism Sand), a Grains slider, `sand_grains` in the settings
+  (older files load; `look` grows to seven), thumbnails, `GEQ_GRAINS`, `GEQ_SANDDEBUG`. `prepare_scene` now gives a
+  scene built after the targets exist its size, so the 35 MB density buffer is allocated at prewarm.
+
+**Measured** (5120x1440, real time, demo and dense signals, GPU times from timestamp queries, taken while the
+display was on)
+
+| Scene | fps | Compute (`scene_upd`) | Plates + sand resolve (`scene`) | Bloom |
+|-------|-----|-----------------------|---------------------------------|-------|
+| Chladni Sand, grains 1.0 (491,520 on screen) | 120.0 | 1.22 ms | 0.58 ms | 0.45 ms |
+| grains 0.5 / 1.5 | 120.0 / 120.0 | 0.73 / 2.15 ms | 0.58 / 0.59 ms | 0.45 ms |
+
+The dense fixture costs the same as the demo. `cost_ms` is 1.9. Nothing below was re-measured after the last two
+changes (the setup pass spread over four frames, and allocating at prewarm); see the end of this section.
+
+**Findings worth keeping**
+
+- Drawing each grain as a tiny quad cost 7.2 ms (a first version: 491k instances, two triangles each, additive
+  blend) and scaled linearly with grains (2.15 ms at a quarter, 3.85 at half). Bisecting: constant colour in the
+  vertex shader changed nothing (7.23 ms), shrinking the quads from 4.1 to 1.2 px halved it (3.80 ms), so it was
+  rasterising a million tiny triangles and blending them, not vertex work. Splatting in the compute pass with
+  atomics and shading per pixel costs 1.22 + 0.58 ms and also gave the soft saturation for free.
+- Every antisymmetric mode (`s = -1`) keeps the diagonal x = y still and the corner (0,0), so sand collected there
+  and the same diagonal burned in every figure; and an antisymmetric mode with m + n even is a blob at the centre
+  (a zero of high order, `(1,3)`, `(3,5)`). The table now mixes signs (mostly symmetric, with `(3,4)` and
+  `(5,8)` antisymmetric) and a test checks that no plate keeps one line still in all of its modes.
+- Mode sums can cancel: with near-equal weights `(1,2,+)`, `(1,3,+)` and `(2,3,-)` add up to zero along the whole
+  bottom edge, which drew a band of sand along the wall that looked like a bug. It is a real nodal line; changing
+  the third to `(2,3,+)` removed that case, but any table can have such coincidences.
+- A pull toward the nearest zero must ignore zeros outside the plate, or sand piles against the wall wherever a
+  nodal line passes just beyond the edge (first with a 2% margin, then none).
+- Louder music shakes harder, so lines fattened with level. The noise (4.4) is now low enough, and the pull to
+  the lines (3.2 per second at energy 1) strong enough, that lines stay thin at full energy; a hit is what
+  breaks them: the shake is `1 + 4.5 x Motion x onset` (3.7x for a full-strength hit at Motion 0.6) with the
+  pull weakened by its square root.
+- The demo signal's spectrum is nearly flat (bands within 0.5-0.65 of each other during the groove), so three
+  modes keep equal shares and the figure holds for tens of seconds; the percussion fixture changes figures every
+  few seconds. Real, tilted music should lead with one band more often (the weights are squared to help); none
+  has been heard.
+- Frame-rate independence only holds if the noise scales with sqrt(dt) and the tumbling and pull with dt; the
+  clamp on dt (50 ms) bounds a stall.
+
+**Not done yet / not verified**
+
+- The display went to sleep during this session ("Monitor is Off", DPMS timeouts disabled, so it was switched
+  off rather than timed out), which stops presentation and drops the GPU clocks; nothing after that point could be
+  measured or captured. Still to do on the real machine: re-run the cycle (`GEQ_CYCLE=3 GEQ_SCENE=5 GEQ_PRESET=3
+  ... GEQ_FPS=1`). Before the display slept, the crossfade from Smoke into the sand showed two transition windows
+  with p95 24-25 ms (about three frames in 60), both before and after the allocation moved to prewarm, while later
+  crossfades inside the sand and out of it were at 120 fps with p99 9-14 ms; its cause is not established (the
+  init pass was the suspect and is now spread over four frames, but that was not measured).
+- The thumbnails in `assets/thumbs/6-*.png` are the 14 s captures of each look at 2560x720, cropped and scaled to
+  336x109; run `tools/make-thumbs.sh` to replace them with the standard 1600x450 captures.
+- Another `geq-gpu` instance was running on this GPU during the session (started before it), so earlier frame-time
+  tails (the median column read 10-13 ms at 120.0 fps for every scene, Smoke included) are not comparable with
+  the plan's earlier tables; the GPU-time columns and fps are.
+- Quality settings beyond Grains (a render scale, a plate resolution), and tuning on real music.
+
+## Milestone 6: Ferrofluid Orb (scene 8 in the table, ID 7)
+
+A glossy black sphere floating over a polished floor, with broad elastic lobes under fine spikes. IDs: 7 = Ferrofluid Orb.
+
+**Shipped**
+
+- `scenes/ferro.rs` (the springs, the sites, the scene; unit-tested), `ferro_common.wgsl` (the uniform block and the
+  map between the height texture and directions), `ferro_height.wgsl` (the offscreen pass) and `ferro.wgsl` (the
+  mesh, the studio, the floor). The camera is a free orbit; the scene is MSAA (it is rasterised geometry).
+- The shape. 192 spike sites on a Fibonacci spiral from the bottom pole to the top, site `i` = frequency bin `i` of the
+  waterfall's spectrum (so a rising sweep climbs the orb), about 0.256 rad apart; each spike is a cone with concave
+  flanks, `h = A (1 - alpha / w)^2` with `w` = 0.17 rad (a sharp tip and a base that runs into the surface). Eleven lobes
+  (one per EQ band, on their own spiral) are broad bumps, `A exp(-kappa (1 - cos alpha))`, which wrap the sphere without
+  a seam. The height pass turns both into a 256 x 128 `Rgba16Float` longitude / latitude map every frame: the height in
+  `w` and the *analytic gradient* on the sphere in `xyz` (a world-space tangent vector, so there is no seam or pole
+  singularity in it). The plan asked for an `R16Float` height map with normals differenced from it; bilinear filtering
+  of a height map has a kink at every texel edge, and a sharp strip light reflected in the surface shows each one,
+  where interpolating the stored gradient does not. The mesh (384 x 192 cells, 442k vertices from `vertex_index`)
+  samples the map in the vertex shader, and the normal of the surface `r = R (b + h)` is `(b + h) dir - gradient`.
+- The motion is plain Rust, in fixed 1/240 s steps (so 30, 60 and 120 fps agree, tested). Each spike is a spring
+  (7 Hz) pulled toward its level, `0.15 + 0.85 smoothstep(level, 0.22, 0.95)` while the signal gate is open (every site
+  carries a short spike, the loud ones rise out of it) and thrown out by a force proportional to its rise (the same
+  normalized rise that drives the fountain, above 0.22). Each lobe is a softer spring (2 Hz) aimed at how far its band is
+  above the others' average, so a louder band swells and a quieter one sinks and the volume holds; the onset envelopes
+  kick the lobes and hop the whole orb. Sustained bass breathes it (4%). Silence retracts the spikes and the orb settles
+  into a smooth sphere. Everything is bounded: springs are clamped (a spike may overshoot to 1.3x of its height; nothing is drawn below the
+  surface), and at Spikes 1 the lowest point the shape can reach still clears the floor (checked in a test).
+- The material. A black mirror (`F0` 0.07, Fresnel) showing a procedural studio of six rectangular strip lights in the
+  theme's colours: a long one overhead (bass), two tall ones at the sides (mids), two behind it for the rim (highs), a
+  thin one low in front. The ray from the surface is intersected with each light's plane, with edges blurred by the
+  pixel's footprint on that plane (so thin strips seen in spike flanks fade rather than shimmer) and by the surface's
+  roughness times the ray's length. The whole rig turns slowly (`0.05 rad/s x Motion`, a third as fast in silence), so
+  reflections keep sliding when the music stops. The tallest spikes glow at their tips in the colour of their frequency
+  (the latitude of the tip is its frequency, so Rainbow runs bass to treble up the orb). A faint dome gives the
+  silhouette a rim against the dark.
+- The floor. Dark and polished: a faint polar grid, the ring of eleven LEDs the orb floats over (bass at the left on the
+  front arc, each filling with its band's level and flaring on onsets, also seen in the orb's underside), a soft pool of
+  light, and ripples out from the ring on low-frequency onsets. The mirror image is the same mesh at half density,
+  mirrored in y and shaded from the camera's reflection (so it shows the underside), additive, with the opposite face
+  culled (an additive pass would otherwise draw the back of the sphere on top of its front). It fades with depth and is
+  strong at grazing angles. The floor itself reflects only the overhead light, at a third strength.
+- `Ctx::pipeline_cull` (a face-culling variant of `pipeline_with`), `SceneParams` gained `spikes`, `spectrum` (the 192
+  displayed levels) and `rise`, a Spikes slider (`Control::OrbSpikes`, `orb_spikes` in the settings, `GEQ_SPIKES`), four
+  looks (Obsidian Ice, Ember Core, Neon Magnet, Prism Oil), stored thumbnails, Motion and Flash tooltips for the scene.
+  Motion is how elastic the fluid is (hits, lobe wobble, breathing, the light rig; 0 holds a fluid that only follows the
+  loudness in still light) and Flash the pulse of the lights, the ripples and the tip glow.
+
+**Measured** (5120x1440, real time, demo signal, GPU times from timestamp queries)
+
+| Scene | fps | frame median / p99 | Scene GPU | Height pass | Bloom |
+|-------|-----|--------------------|-----------|-------------|-------|
+| Ferrofluid Orb | 120.0 | 8.2-8.5 / 9.0-9.2 ms | 1.70-1.77 ms | 0.06 ms | 0.43 ms |
+
+Bisecting the scene pass: with nothing drawn the 4x MSAA clear and resolve at this size already cost 0.71 ms; the orb adds
+about 0.34 ms, the floor 0.45 ms and the mirror image 0.2 ms. The height pass the plan worried about (6.3 million site
+contributions) is 0.06 ms, so nothing needed precomputing; the budget has room for a 512 x 256 map or a denser mesh
+if they are ever wanted. A cycle through sand, the orb's four looks and the columns held 120.0 fps in every transition
+(p99 9.0-10 ms; the worst single frames were 14.9 ms going into the orb and 15.8 ms in one window of its own steady
+playback, once each). The orb is the slowest scene to build, 46 ms at prewarm (the others are 3-12 ms), which happens
+one scene per frame at startup; the worst frame of the startup window was 9.8 ms.
+
+**Findings worth keeping**
+
+- The first version read as a sea urchin, not a black mirror: spike bases 0.205 rad wide on sites 0.256 apart, and
+  almost every bin tall in dense music, left no smooth surface between them for a reflection to show. Narrower spikes
+  (0.17 rad), taller at the top of the range (0.40 of the radius), and a short spike on every site (0.15) with only the
+  loud ones rising out of it gave the glossy gaps back. The lobes give the orb its larger shape; the spikes are the
+  detail.
+- Physically correct reflections of the tall strip lights in a glossy floor are three bright pillars, which pulled the
+  eye from the orb, so the floor shows the overhead light only and the tall ones stay on the orb. A long horizon light
+  behind the orb gave a hard bright rod at the horizon that did not change when it was dimmed to 40% and made three times
+  taller (the cause is not established); it was removed, and the floor without it is the better composition at 32:9.
+- A rough surface blurs a reflection in proportion to how far the reflected ray travels, not by a fixed width: a fixed
+  blur left the pillars' edges hard and softened nearby lights too much.
+- Stored analytic gradients (above) matter; so does shading the mirror image from the mirrored eye with the real
+  normals, instead of mirroring the normals.
+- A hit has to throw a spike out by roughly a third of its range at the default Motion to read as a hit; the springs'
+  force is proportional to the rise (not an impulse per frame), so it does not depend on how many frames the rise spans.
+- Nothing here has been heard on real music, which this machine does not have; only the synthetic songs. The motion was
+  judged from stills and frame sequences (spike lengths changing frame to frame without flicker), not watched live.
+
+**Not done yet**: a quality setting for mesh density (the mirror image is already half density), a real blur for the
+mirror image (it fades and roughens, it is not filtered), tuning on real music, and portrait-shaped windows (the camera
+backs off so the orb fits, but only 32:9, 21:9, 16:9 and the default window were looked at).
+
+## Milestone 7: Aurora (scene 9 in the table, ID 8)
+
+Broad translucent curtains over a dark lake. This was the plan's "prototype, scope set by measurement"; the gate
+(convincing depth and musical response inside the frame budget) passed, so it ships as a scene. IDs: 8 = Aurora.
+
+**Shipped**
+
+- `scenes/aurora.rs` (the ribbon table, clocks, view, scene; unit-tested), `aurora_common.wgsl` (the uniform block and
+  noise), `aurora.wgsl` (the ribbon pass) and `aurora_screen.wgsl` (the screen pass). Up to six vertical sheets,
+  farthest first, each a 256-column strip drawn as one instanced draw of 1,530 vertices. Screen x is frequency on every
+  sheet. The nearest shows the newest history row and each farther one a little older (0 to 1.3 s), so a hit appears
+  near and echoes back; the rows are read with time interpolation one row behind the newest, so 60 Hz rows give smooth
+  120 Hz motion. A column's height is its bin's level smoothed over a few bins (a floor keeps a dim low glow in silence).
+- A sheet is folded in depth by two slow waves (the mids deepen them; Motion 0 keeps a small fixed fold) and its base
+  wanders. Where a fold turns edge-on the light is brighter (the pleat: `sqrt(1 + slope^2)^1.5`, capped at 2.2). Light
+  is a sharp bright lower edge plus rays that rise from it, lean with height and fade; the edge is anti-aliased
+  analytically (the quad reaches below the base and the shader draws the edge), so the ribbons need no MSAA. Rays
+  are 1D value noise in three octaves; each finer octave fades out as it nears a pixel in size.
+- Depth: farther sheets stand lower in the sky (the same altitude seen from further away), smaller, fainter (gain
+  0.22 to 1.0), softer (lower ray contrast, a thicker edge) and carry older spectrum. Compositing is premultiplied
+  "over" in farthest-first order: each ribbon adds its light and dims what is behind it by up to 0.6 of its own
+  opacity, weighted toward the near ones, so overlapping curtains keep their shapes.
+- Onset highlights: for each ring (low and mid onsets) a narrow pale bundle of rays runs up the sheet at the hit's
+  spectral centroid, reaching each farther ribbon a little later (0.1 to 0.55 s), dying in about 0.6 s. Flash scales
+  them; Flash 0 removes them. The high-frequency envelope only sharpens the rays for a moment.
+- Signals: sustained loudness lifts the columns, mids fold the sheets, bass lifts the stack by about a degree at most and stirs
+  the lake, the slow energy trend spreads the stack apart (bases +/- 8%, heights +/- 15%), the signal gate dims the light
+  to 35% and slows every clock to a quarter. Clocks (`Clocks`) are integrated with `dt` times a speed, so 30 and 120 fps
+  agree and Motion 0 stands still.
+- The ribbon target is half resolution (`DEFAULT_SCALE`, `GEQ_AURORA_SCALE`) and is theme-free: it stores the weights of
+  the palette's three roles (dominant, supporting, accent) plus the opacity, and the screen pass turns them into colour.
+  The palette ramp is linear in the three roles, so nothing is lost, and Rainbow takes its hue from screen x. That makes a
+  crossfade between two looks of the scene correct from one render (the second draw's `update` is skipped).
+- Screen pass (full resolution, non-MSAA): the target over a night sky (the shared `sky.wgsl` stars in three layers, a pale
+  Milky Way band, a faint glow along the horizon), a procedural treeline (low hills with clumps of pines) and a lake that
+  mirrors the target about the horizon with ripples that stretch and wobble the image more toward the viewer (three taps,
+  fresnel falling with depth, the trees reflected as dark). Colour where ribbons pile up is compressed by `1/(1 + 0.45 sum)`
+  and only the brightest light burns toward white.
+- Camera: a fixed spot at the water's edge looking 7.8 degrees above the horizon, a constant 40 degree vertical field of
+  view (a wider picture shows more sky sideways, not more height), so the horizon is at 69% of the height whatever the
+  aspect. The user may turn it by 0.09 rad, pitch it by 0.05 and zoom 0.85-1.2; the total turn is capped at 0.11 rad (a test
+  checks the ribbons' ends stay off screen at 32:9 and 21:9).
+- Composition by aspect, not by cropping: six ribbons at 32:9, five from 2.1:1 (21:9), four from 1.5:1 (16:9), three below
+  that; the user's Curtains slider (2-6, `aurora_curtains`, `GEQ_CURTAINS`) caps it. The set always keeps the nearest and the
+  farthest.
+- Four looks (Boreal Green, Polar Ice, Neon Veil, Prism Curtains), stored thumbnails, `look` grows to nine, settings from
+  before the ninth scene load, Motion and Flash tooltips for the scene, README.
+
+**Measured** (5120x1440, real time, GPU times from timestamp queries, no other `geq-gpu` running)
+
+| Case | fps | frame median / p99 | Ribbons (`scene_upd`) | Screen pass (`scene`) | Bloom |
+|------|-----|--------------------|-----------------------|-----------------------|-------|
+| Demo signal, 6 curtains, scale 0.5 | 120.0 | 8.33 / 8.6-8.7 ms | 0.43 ms | 1.31 ms | 0.45 ms |
+| Dense fixture | 120.0 | 8.33 / 8.7 ms | 0.45 ms | 1.31 ms | 0.45 ms |
+| Render scale 1.0 / 0.25 (dense) | 120.0 / 120.0 | 8.33 / 8.6-8.7 ms | 1.59 / 0.14 ms | 1.31 ms | 0.45 ms |
+| 3 curtains (dense) | 120.0 | 8.33 / 8.7-8.9 ms | 0.24 ms | 1.31 ms | 0.45 ms |
+
+`cost_ms` is 1.8. A scene cycle (Ferrofluid, Aurora, Columns, with the auto-cycle's look changes inside each) held 120.0 fps
+in every transition (p99 8.5-8.9 ms): live crossfades into and out of the scene and between two looks of it (one render,
+two screen passes). The one hitch of the run (p95 25 ms over 20 frames, the log's `resize` window) came with entering fullscreen, which is a window change and not the scene.
+
+**Findings worth keeping**
+
+- The first captures had two defects that looked like one. Cream-coloured masses in the loud bass columns were not the body
+  of the ribbons: they were the onset highlights (a kick and snare landing at 13.6 s of the demo), too wide and too bright
+  and summed over six ribbons. Narrowing them (0.035 to 0.011 of the width), cutting their strength and making them follow the
+  rays fixed that. Separately, the base edge had a brightness floor, so quiet columns drew as bright as loud ones and the
+  stack read as six parallel stripes; making edge and body follow the column's level, widening the wander of each base
+  (0.006-0.013 to 0.018-0.044 of a tangent) and deepening the folds turned the stripes into curtains.
+- Colour of the body: with the accent role at v = 0.5 the tall columns went cream where green, yellow and red add. The ramp
+  now reaches the supporting colour only near the thin ray tops (`t = v^2.2`). Overlap was tamed by three changes made
+  together (body 0.55 to 0.30, opacity 0.30 to 0.45 capped at 0.6, the colour compression); they were not tried separately,
+  and no pure-additive comparison was kept.
+- Isolated events were checked with the percussion fixture (a kick at t = 6 s): calm at 5.9, the bass side rises and a
+  highlight leaves the near ribbon at 6.1, its echo is on the second ribbon at 6.25-6.45, a trace remains at 6.8, calm at 7.4.
+  The demo's kick repeats every 0.5 s at the same frequency, so the first version (life `exp(-1.8 t)`) piled the
+  highlights into a near-permanent patch; `exp(-3.4 t)` and a faster climb gave one accent per hit.
+- Half resolution is nearly free of visible loss: next to scale 1.0 only the sharp lower edge is a little softer (one
+  full-resolution pixel), the rays are the same. The ribbon pass is fill-bound (0.14, 0.43 and 1.59 ms at 0.25, 0.5 and 1.0, so
+  about 1.15 ms saved at the default); the picture came out right at 0.5 and the scale stays an environment setting.
+- Fine ray detail aliased into a moire on the nearest ribbon at half resolution (the finest octave at about one cell per
+  pixel). Fading each octave by `fwidth` of its coordinate removed it. A derivative must be taken before the early return, or
+  the shader leaves uniform control flow.
+- The screen pass is the expensive half, not the ribbons. Bisecting its 1.46 ms: the three star layers 0.52 ms, the Milky Way
+  band 0.27 ms (two cloud evaluations over a third of the sky for a barely visible effect; one evaluation over a narrower
+  band is 0.12), the lake 0.11 ms, and 0.57 ms for everything else (the sky direction, the palette lookups, the treeline, the
+  clear and the target read). The stars are the next saving if the budget ever needs one.
+- The ribbons reach 1.4 screen half widths; turning the view sideways shows their end where they fade (from 1.12), which at
+  32:9 and a 0.16 rad turn would put the screen edge at 1.41 (worked out, not seen). The turn is capped at 0.11 rad and a test computes the edge for 21:9
+  and 32:9 at the widest zoom.
+
+**Not done yet / not verified**
+
+- Nothing here has been heard on real music, which this machine does not have; only the synthetic songs. The motion was
+  judged from stepped captures (the kick timeline above, five frames around the demo's hit) and the frame-time runs, not
+  watched live. Real, tilted music may want the treble lift in the vertex shader (`0.80 + 0.55 x`) tuned.
+- A bass hit does not ripple the lake (the lake's ripples follow sustained bass); the Ferrofluid floor's expanding rings would
+  carry over. The highlights use only the low and mid onset rings (the analyzer launches none for the highs).
+- Windowed 2400x1000, 21:9, 16:9, 1:1 and 32:9 were looked at; tall portrait windows were not. The look browser thumbnails were
+  captured at 1600x450 with `tools/make-thumbs.sh`'s settings.
+- Quality settings beyond Curtains: a render-scale control and a star-layer count are the obvious ones if a weaker GPU needs
+  them (the ribbon pass and the stars are the two costs that scale).
+
 
 ## Fix: quieter sound while the app is open (2026-10-13)
 

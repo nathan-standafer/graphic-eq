@@ -4,6 +4,8 @@
 #   tools/make-thumbs.sh
 set -e
 cd "$(dirname "$0")/.."
+# the aurora needs a few seconds for its curtains to answer the groove
+shot 8 0 8-boreal-green 13.6;  shot 8 1 8-polar-ice 13.6;      shot 8 2 8-neon-veil 13.6;  shot 8 3 8-prism-curtains 13.6
 cargo build --release
 bin=target/release/geq-gpu
 shot() { # scene preset name seconds
@@ -18,4 +20,10 @@ shot 3 0 3-p31-green 12;     shot 3 1 3-amber-scope 12;   shot 3 2 3-ice-trace 1
 shot 4 0 4-ice-geyser 13.6;    shot 4 1 4-ember-fountain 13.6; shot 4 2 4-neon-spray 13.6; shot 4 3 4-spectrum-jets 13.6
 # the smoke needs twenty seconds of the groove to fill the screen
 shot 5 0 5-ice-vent 22;        shot 5 1 5-ember-smoke 22;      shot 5 2 5-neon-haze 22;     shot 5 3 5-prism-plumes 22
+# the sand needs a few seconds of the groove to settle into its figures
+shot 6 0 6-moonlit-sand 14;    shot 6 1 6-amber-dust 14;       shot 6 2 6-neon-grit 14;     shot 6 3 6-prism-sand 14
+# the orb needs a moment for its spikes to answer the groove
+shot 7 0 7-obsidian-ice 13.6;  shot 7 1 7-ember-core 13.6;     shot 7 2 7-neon-magnet 13.6; shot 7 3 7-prism-oil 13.6
+# the aurora needs a few seconds for its curtains to answer the groove
+shot 8 0 8-boreal-green 13.6;  shot 8 1 8-polar-ice 13.6;      shot 8 2 8-neon-veil 13.6;  shot 8 3 8-prism-curtains 13.6
 cargo build --release

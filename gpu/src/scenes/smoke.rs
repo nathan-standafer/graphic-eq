@@ -125,7 +125,7 @@ fn strength(level: f32, gate: f32) -> f32 {
 
 /// The onset envelope that reaches band `i`: the low envelope for the bass bands, the mid one in the
 /// middle and the high one at the top, blended over the seams.
-fn onset_for(i: usize, fx: &[f32; 4]) -> f32 {
+pub(super) fn onset_for(i: usize, fx: &[f32; 4]) -> f32 {
     let i = i as f32;
     let lo = 1.0 - ((i - 2.0) / 2.0).clamp(0.0, 1.0);
     let hi = ((i - 6.0) / 2.0).clamp(0.0, 1.0);
@@ -543,6 +543,11 @@ mod tests {
             peak_hits: [0.0; 11],
             smoke: 1.0,
             nozzle_x: std::array::from_fn(|i| (i as f32 + 0.5) / 11.0),
+            grains: 1.0,
+            spikes: 1.0,
+            curtains: 6,
+            spectrum: [0.0; crate::analyzer::CURVE_POINTS],
+            rise: [0.0; crate::analyzer::CURVE_POINTS],
         }
     }
 
