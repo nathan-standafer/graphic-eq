@@ -77,8 +77,17 @@ struct TowerOut {
   let h = tower_h(in.k);
   let dx = abs(in.uv.x);
   let core = (1.0 - smoothstep(0.80, 1.0, dx)) * (1.0 - smoothstep(h - 0.8, h, in.uv.y)) * (0.65 + 0.35 * (1.0 - in.uv.y / h));
-  let halo = exp(-0.5 * dx * dx) * 0.10;
+  // the glow dies away before the quad's edges and top, so the strip has no visible box around it
+  let halo = exp(-0.5 * dx * dx) * 0.10 * (1.0 - smoothstep(1.2, 2.4, dx)) * (1.0 - smoothstep(h - 0.6, h + 1.0, in.uv.y));
   return vec4<f32>(tower_tint(in.k) * tower_gain(in.k) * (1.8 * core + halo) * u.exposure, 1.0);
+}
+
+// The water's own body: a soft sheen on the faces of the ripples turned toward the towers, so a ring shows wherever it
+// is and not only where it catches a reflection. Flat water has a little of it everywhere (about 0.012), which the sky
+// painted below the horizon has to match or the two meet in a step.
+const SHEEN_DIR: vec3<f32> = vec3<f32>(0.0, 0.30, -0.95);
+fn sheen(n: vec3<f32>) -> vec3<f32> {
+  return palette(0.3, 0.5) * (16.0 * pow(max(dot(n, normalize(SHEEN_DIR)), 0.0), 6.0));
 }
 
 // ---- the sky behind everything: just the horizon haze, painted by the elevation of each ray
@@ -98,7 +107,7 @@ struct SkyOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> };
     // between the horizon and where the water quad ends (its far clip) this is the water at its far end: the haze
     // reflected at a grazing angle, so the two meet without a seam
     let a = -d.y;
-    c = horizon(a) * (0.09 + 0.91 * pow(1.0 - a, 5.0)) + vec3<f32>(0.002, 0.003, 0.0065);
+    c = horizon(a) * (0.09 + 0.91 * pow(1.0 - a, 5.0)) + vec3<f32>(0.002, 0.003, 0.0065) + sheen(vec3<f32>(0.0, 1.0, 0.0));
   }
   return vec4<f32>(c * u.exposure, 1.0);
 }
@@ -135,10 +144,7 @@ struct FloorOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> 
   }
   var c = vec3<f32>(0.002, 0.003, 0.0065) + refl * fres;
 
-  // a soft sheen on the faces of the ripples turned toward the towers: the water's own body, so a ring shows
-  // wherever it is, not only where it catches a reflection
-  let ld = normalize(vec3<f32>(0.0, 0.30, -0.95));
-  c += palette(0.3, 0.5) * (16.0 * pow(max(dot(n, ld), 0.0), 6.0));
+  c += sheen(n);
 
   // the spectrum line the drops start from (bass left, treble right), seen through the ripples
   let half_w = 0.5 * u.ctl.y;

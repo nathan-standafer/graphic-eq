@@ -1587,16 +1587,17 @@ lights 22 ms later, when the leader arrives.
 
 - Nothing here has been heard on real music, which this machine does not have; only the synthetic songs. The timing was measured in
   stepped captures and the log, not with a real-time recording of the output.
-- Windowed 2560x720, 1600x450 and 1600x900 were looked at; tall portrait windows were not.
+- Windowed 2560x720, 1600x450 and 1600x900 (with the EQ strip) and a tall portrait window (760x1000, where the bolts are large and the
+  camera still frames them) were looked at.
 - A cloud: the strikes come from nothing above the frame. A faint glow in the sky around the top of each channel was left out to
   keep the field dark; try it if the empty top reads as unfinished.
 - The look browser thumbnails are 12.6 s of the demo; another moment may suit a look better.
 
 ## Milestone 10: Ripple Pond (scene 12 in the table, ID 11)
 
-A dark glossy pool that keeps a record of the last few seconds of hits. IDs: 11 = Ripple Pond. **The monitor was off for most of
-this session** (see the notes at the end), so everything below that needs a display was done on the software renderer or by the new
-windowless harness, and the real-time frame-time run was not done.
+A dark glossy pool that keeps a record of the last few seconds of hits. IDs: 11 = Ripple Pond. **The monitor was off while the
+scene was built**, so the first look at it was on the software renderer and on a new windowless harness on the RX 580; once the display
+was back the real-time runs, the live scene cycle and the thumbnails were done on the real GPU, and what they changed is below.
 
 **Shipped**
 
@@ -1622,7 +1623,10 @@ windowless harness, and the real-time frame-time run was not done.
 - The shading reads a slope texture (`Rgba16Float`: slope in x and z per world unit, and the height), written by a pass after the steps
   from central differences of the exact state, and mipmapped by three box-filter passes; the water samples it with an anisotropic
   (8x) trilinear sampler, so a thin ring far away is averaged over the pixel's footprint instead of aliasing. (The plan feared
-  specular glints aliasing at 120 Hz; whether this removes all shimmer was not judged in motion.)
+  specular glints aliasing at 120 Hz. An A/B on consecutive 120 Hz frames, this read against the same texture read at mip 0 only, found
+  the filtered read about 3-4% steadier from frame to frame in the far and mid water of a 1000x520 window, and no difference near the
+  camera or at 5120x1440, where a pixel covers fewer than two cells even at the far end of the pond; so it is cheap insurance, three tiny
+  passes, not a visible gain at the target size.)
 - The water: near-black, Fresnel (0.09 at normal incidence, strong at grazing angles), mirroring a haze along the horizon and four light
   towers (`rect_light_at`, the Ferrofluid's studio function, now returning where the ray met the light so the reflection fades up the
   tower). Bass is the left tower, the highs the right, each burns with its region's sustained level and flares on its onsets (Flash),
@@ -1637,7 +1641,7 @@ windowless harness, and the real-time frame-time run was not done.
   offscreen targets with a synthetic signal, prints each pass's GPU time and saves the final composite as a PNG. It needs no display, treats any
   wgpu validation error as a failure, and `GEQ_HL_SCENE2` draws a second scene to measure a crossfade.
 
-**Measured** (windowless harness, RX 580 under RADV, 5120x1440, synthetic signal with a hit every half second, GPU times from timestamp queries)
+**Measured, windowless harness** (RX 580 under RADV, 5120x1440, synthetic signal with a hit every half second, GPU times from timestamp queries)
 
 | Case | Simulation (`scene_upd`) | Scene (`scene`) | Bloom | Frame total |
 |------|--------------------------|-----------------|-------|-------------|
@@ -1647,9 +1651,20 @@ windowless harness, and the real-time frame-time run was not done.
 
 `cost_ms` is 1.2. The simulation's cost depends on the aspect, not the pixel count (2560x720 measured 0.25 ms, the scene 0.23 ms). The
 CPU needs 1.2 ms median (2.0 ms p99) to record a frame. Sixty simulated seconds of hits at 2560x720 gave no wgpu errors and no NaN or Inf
-(`GEQ_VIEW=nan`), and the same for Lightning. Prewarm was not measured. **Not measured: frame time in real time at 120 Hz** (the monitor
-was off, which stops presentation; see below). The GPU cost is a fifth of the frame, so the expectation is 120 fps, but it is an
-expectation. Tests: 104 pass (10 are new for the pond, 7 for the storm).
+(`GEQ_VIEW=nan`), and the same for Lightning. Tests: 104 pass (10 are new for the pond, 7 for the storm).
+
+**Measured, the live app** (display on, 5120x1440 fullscreen, `GEQ_FPS=1 GEQ_GPUTIME=1`, the user's session running, nothing else on the GPU):
+
+| Case | fps | frame median / p95 / p99 | GPU: scene, simulation, bloom |
+|------|-----|--------------------------|--------------------------------|
+| Ripple Pond, dense fixture, steady (6 windows) | 119.7-120.2 | 8.0-8.35 / 9.9-10.4 / 12.2-15.3 ms | 0.89 + 0.27 + 0.44 = 1.60 ms |
+| Fireworks, same session, as the control | 119.9-120.1 | 8.2-8.4 / 9.9-10.5 / 13.2-14.7 ms | |
+| Cycle through Lightning's three looks, into the pond and through its looks (7 crossfades, all live) | 119.7-120.7 | 8.2-8.5 / 9.7-10.9 / 11.3-15.0 ms | |
+
+The p99 is the machine's, not the scene's: the control shows the same tail, and the load average was 6 with the desktop's applications busy
+(the same scene gave p99 9.3-9.8 ms on a quieter machine earlier in the day, as the storm did). The GPU times agree with the harness
+(scene 0.89, simulation 0.27, bloom 0.44). Prewarm is 6.2 ms (Lightning's is 10.2). The live app's `GEQ_SHOT` capture of the pond is
+byte-deterministic (two runs hashed identically) and looks like the software renderer's.
 
 Timing, with the percussion and impulse fixtures: a crater is injected in the frame that reports the hit, 33 ms after the drum in the
 stepped 60 Hz captures (the same detector as the other two scenes), so the first ring is there at once; the droplets' rings follow 0.3 to
@@ -1667,6 +1682,11 @@ Fireworks' hit counts are 80, 82, 40, 39, 38, 12, 1, 0: a hit makes a crater and
 - The first sky painted the horizon haze at full strength below the horizon, between the horizon and the water's far clip, where the
   water reflects only a fraction of it: a flat bright band with a hard lower edge. Painting that part as the Fresnel-weighted reflection
   of the haze removed the band and left a thin horizon glow.
+- At full resolution on the real GPU there was a 30% step at the horizon (pixel values 12,25,35 to 15,33,45): the sky quad's water-below-the-
+  horizon formula left out the water's own flat sheen (about 0.012), which the water has everywhere. Making the sky call the same
+  `sheen()` function as the water removed it (measured by reading the column of pixels again).
+- A strip's glow was cut off by its quad: a faint rectangle above each tower, easy to see in a tall portrait window and not at 32:9.
+  The glow now dies away before the quad's edges and top.
 - Four tall towers were pillars that took the picture from the pond (and ran off the top of the frame): shorter (5 to 8 units), thinner
   and farther (z = -25), with their tops in view, they read as lights on the far shore.
 - A pond that mirrors the sky has a fixed far end: the camera's far plane (100 units) clips the water before the horizon, so the sky
@@ -1696,18 +1716,12 @@ Fireworks' hit counts are 80, 82, 40, 39, 38, 12, 1, 0: a hit makes a crater and
 
 **Not done / not verified**
 
-- **Real-time frame time and the live app on the real GPU.** The monitor was off for most of the session (`xset q`: `Monitor is Off`, DPMS
-  timeouts all 0, so it was switched off, the same as on 2026-10-13), and the app's window never presents then. I did not force it on.
-  Everything visual was therefore judged on the software renderer (llvmpipe in a nested X server, `Xephyr`) and on the windowless harness
-  on the RX 580; the unmeasured pieces are the real-time p95 and p99 over a minute, the scene cycle through the pond in the live app, and
-  prewarm.
-- **The Ripple Pond thumbnails (`assets/thumbs/11-*.png`) were captured on the software renderer** (20.4 s of the demo, deterministic:
-  each look hashed identically twice), not on the RX 580. Run `tools/make-thumbs.sh` with the display on to replace them.
-- The `GEQ_SHOT` path on the real GPU was not run for the pond; the windowless harness uses the same compositor and the same shaders, with a
-  synthetic signal, and its 5120x1440 renders were looked at.
 - Nothing here has been heard on real music, which this machine does not have; only the synthetic songs.
-- Motion (the ripples' shimmer under the camera's idle drift, the 120 Hz look of fine rings) was judged from stills and a silence
-  sequence, not watched live. Tall portrait windows were not looked at; 32:9, 16:9 and 1600x450 were.
+- Motion was judged from stills, a silence sequence (calm glass 3.8 s after the last hit: rings still spreading at 0.5 s, nearly gone at
+  2 s) and the frame-difference A/B above, not watched live. The windowed UI (EQ strip below the scene) and a tall portrait window
+  (760x1000) were looked at, as well as 32:9, 16:9 and 1600x450.
+- The Ripple Pond thumbnails (`assets/thumbs/11-*.png`) are real RX 580 captures of 20.4 s of the demo, each look hashed identically twice. At
+  336 px the rings are faint; the towers carry the thumbnail.
 - Not done: the capillary (dispersive) term, a render scale for the water shading (it costs 0.9 ms), a quality setting for the grid.
 
 ## Fix: quieter sound while the app is open (2026-10-13)
