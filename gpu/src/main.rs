@@ -3,6 +3,15 @@ mod app;
 mod audio;
 mod bands;
 mod clock;
+mod drums;
+#[cfg(test)]
+mod corpus;
+#[cfg(test)]
+mod drum_eval;
+#[cfg(test)]
+mod drum_train;
+#[cfg(test)]
+mod real_corpus;
 mod engine;
 mod modulation;
 mod presets;

@@ -1,12 +1,11 @@
 use super::*;
 use super::particles::{Particles, SpawnPlan};
-use crate::modulation::{Hit, RiseHits};
+use crate::modulation::{DrumHits, Hit};
 use std::collections::VecDeque;
 
 /// Shells climb the dark sky while the music is loud, and a hit detonates one. Sustained energy launches
-/// rockets from pads along a line (bass left, treble right, scattered in depth); a hit found in the rise
-/// (`modulation::RiseHits`, the fountain's rise judged against the music's own hardest hits) sets off the
-/// rocket nearest its place on the line, at once and at the height it has reached. The stars of the burst
+/// rockets from pads along a line (bass left, treble right, scattered in depth); a drum hit (the drum detector,
+/// `drums.rs`, through `modulation::DrumHits`) sets off the rocket nearest its place on the line, at once and at the height it has reached. The stars of the burst
 /// carry the spectrum of the moment, hang for several seconds, droop and fall onto a glass floor that lights up
 /// beneath them and mirrors them. Where the hit landed sets the kind: a willow in the lows, a peony in the
 /// mids, a crackle in the highs.
@@ -21,7 +20,7 @@ pub struct Fireworks {
     shells_refl: wgpu::RenderPipeline,
     parts: Particles,
     show: Show,
-    hits: RiseHits,
+    hits: DrumHits,
     fw_buf: wgpu::Buffer,
     fw_bg: wgpu::BindGroup,
     last_frame: u64,
@@ -422,7 +421,7 @@ impl Fireworks {
             sprites: ctx.pipeline_with(&parts.draw_layout, &sh, "fireworks_stars", "vs_star", "fs_sprite", glow),
             parts,
             show: Show::new(1),
-            hits: RiseHits::new(),
+            hits: DrumHits::new(),
             fw_buf,
             fw_bg,
             last_frame: 0,
@@ -453,7 +452,7 @@ impl Scene for Fireworks {
         self.last_frame = f.frame_no;
 
         let p = f.p;
-        let hits = self.hits.update(&p.rise, p.gradient.clamp(0.2, 5.0), p.time as f64, p.gate > 0.5);
+        let hits = self.hits.update(p.drums(), p.gradient.clamp(0.2, 5.0), p.time as f64, p.gate > 0.5);
         let bursts = self.show.step(&Input {
             now: p.time,
             dt,
@@ -705,18 +704,20 @@ mod tests {
     #[ignore]
     fn cpu_cost() {
         let mut show = Show::new(1);
-        let mut rh = RiseHits::new();
+        let mut dh = DrumHits::new();
         let frames = 200_000;
         let t0 = std::time::Instant::now();
         let mut sink = 0.0f32;
         for k in 0..frames {
             let now = k as f32 / 120.0;
-            let mut rise = [0.05f32; 192];
-            let at = (k / 7 * 37) % 180;
-            for j in at..(at + 8).min(192) {
-                rise[j] = if k % 60 < 4 { 1.1 } else { 0.1 };
-            }
-            let hits = rh.update(&rise, 1.0, now as f64, true);
+            // a hit every seventh frame at a wandering place, a kick-like one in four
+            let drums = if k % 7 == 0 {
+                let kind = if k % 28 == 0 { crate::drums::Kind::Low } else { crate::drums::Kind::High };
+                vec![crate::drums::DrumHit { t: now as f64, kind, pos: ((k / 7 * 37) % 100) as f32 / 100.0, strength: 0.8, p: 0.95 }]
+            } else {
+                Vec::new()
+            };
+            let hits = dh.update(&drums, 1.0, now as f64, true);
             let out = show.step(&input(now, 1.0, 0.8, &hits));
             sink += show.pack(now).shells[0][0] + out.len() as f32;
         }

@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drum labeller</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #151b23; --line: #2a3340; --text: #dbe2ea; --dim: #8b97a6; --accent: #4fd8ff;
+    --kick: #ff5a5a; --tom: #ff7bff; --snare: #ffd23f; --hat: #4fd8ff; --cymbal: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { padding: 12px 16px 24px; }
+  h1 { font-size: 15px; margin: 0 16px 0 0; font-weight: 600; letter-spacing: .02em; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+  .group { display: flex; align-items: center; gap: 6px; }
+  button, select, input[type=number] {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font: inherit;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.on { background: #12323d; border-color: var(--accent); }
+  button:focus-visible, select:focus-visible, input:focus-visible, canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .file { position: relative; overflow: hidden; display: inline-block; }
+  .file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+  #name { color: var(--dim); max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #time { font-variant-numeric: tabular-nums; min-width: 9ch; }
+  .app { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 12px; }
+  @media (max-width: 960px) { .app { grid-template-columns: minmax(0, 1fr); } }
+  .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  canvas { display: block; width: 100%; }
+  #overview { height: 56px; cursor: pointer; margin-bottom: 8px; border-radius: 4px; }
+  #main { height: 400px; cursor: crosshair; border-radius: 4px; touch-action: none; }
+  #main.edit { cursor: copy; }
+  aside { display: flex; flex-direction: column; gap: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 0 0 8px; font-weight: 600; }
+  .kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .kinds button { display: flex; justify-content: space-between; align-items: center; gap: 6px; text-align: left; }
+  .kinds button .sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .kinds button kbd { margin-left: auto; }
+  kbd { background: #0a0e13; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 12px ui-monospace, monospace; color: var(--dim); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
+  .dim { color: var(--dim); }
+  .small { font-size: 12px; }
+  #status { min-height: 1.4em; color: var(--accent); margin-top: 8px; }
+  #progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin: 6px 0; display: none; }
+  #progress div { height: 100%; width: 0; background: var(--accent); }
+  textarea { width: 100%; min-height: 64px; background: #0a0e13; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px; font: inherit; resize: vertical; }
+  ul.regions { list-style: none; margin: 4px 0 0; padding: 0; }
+  ul.regions li { display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 2px 0; }
+  ul.regions button { padding: 0 6px; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; max-width: 640px; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog table { border-collapse: collapse; width: 100%; }
+  dialog td { padding: 3px 8px 3px 0; vertical-align: top; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Drum labeller</h1>
+  <div class="group">
+    <span class="file"><button type="button">Open audio…</button><input id="fileAudio" type="file" accept="audio/*,.wav" aria-label="Open audio file"></span>
+    <span class="file"><button type="button" id="btnProp" disabled>Proposals…</button><input id="fileProp" type="file" accept=".json" aria-label="Open proposals file"></span>
+    <span class="file"><button type="button">Labels…</button><input id="fileLabels" type="file" accept=".json" aria-label="Open labels file"></span>
+  </div>
+  <span id="name" class="dim">no audio loaded</span>
+  <div class="group">
+    <button id="play" type="button" disabled>▶ Play</button>
+    <span id="time" class="dim">0:00.000</span>
+    <label class="dim small" for="rate">speed</label>
+    <select id="rate"><option value="1">1×</option><option value="0.75">0.75×</option><option value="0.5" selected>0.5×</option><option value="0.35">0.35×</option><option value="0.25">0.25×</option></select>
+  </div>
+  <div class="group">
+    <button id="edit" type="button" disabled title="Click the picture to add a mark; click a mark to delete it (E)">Edit</button>
+    <button id="viewProp" type="button" disabled title="Show what the detector heard (V). Look after your own passes, to review.">Detector</button>
+    <button id="loop" type="button" disabled title="Loop the excerpt (L)">Loop</button>
+  </div>
+  <div class="group">
+    <label class="dim small" for="split">split</label>
+    <select id="split"><option value="dev">dev</option><option value="test">test</option></select>
+    <button id="export" type="button" disabled title="Download the labels (Ctrl+S)">Export</button>
+    <button id="help" type="button">Help (?)</button>
+  </div>
+</header>
+
+<div class="app">
+  <div class="stage">
+    <canvas id="overview" aria-label="Overview of the whole recording"></canvas>
+    <canvas id="main" tabindex="0" aria-label="Onset image with drum marks"></canvas>
+    <div class="legend" id="legend"></div>
+    <div id="progress"><div></div></div>
+    <div id="status" role="status" aria-live="polite">Open a WAV of a song to begin. <kbd>?</kbd> shows the keys.</div>
+  </div>
+
+  <aside>
+    <div class="card">
+      <h2>Tap with</h2>
+      <div class="kinds" id="kinds"></div>
+      <div class="row small dim"><span><kbd>Space</kbd> taps the highlighted drum</span><span><kbd>Shift</kbd> = ghost</span></div>
+    </div>
+    <div class="card">
+      <h2>Tap latency</h2>
+      <div class="row"><input id="latency" type="number" min="-300" max="600" step="5" value="120" aria-label="Tap latency in milliseconds"> <span class="dim">ms</span><button id="calibrate" type="button">Measure</button></div>
+      <div class="small dim" id="calInfo">How late your taps are, so they can be placed back. Measure once, with the sound on.</div>
+    </div>
+    <div class="card">
+      <h2>Excerpt <span class="dim" style="text-transform:none;letter-spacing:0">(label only this)</span></h2>
+      <div class="row"><span id="excerpt" class="dim">whole file</span><span><button id="inBtn" type="button" disabled>In <kbd>I</kbd></button> <button id="outBtn" type="button" disabled>Out <kbd>O</kbd></button></span></div>
+      <h2 style="margin-top:10px">No drums here</h2>
+      <div class="row"><span class="dim small">mark stretches without drums</span><button id="noBtn" type="button" disabled><kbd>N</kbd> start/end</button></div>
+      <ul class="regions" id="regions"></ul>
+    </div>
+    <div class="card">
+      <h2>Picture</h2>
+      <div class="row"><label for="gain" class="dim small">brightness</label><input id="gain" type="range" min="0.25" max="4" step="0.05" value="1"></div>
+      <div class="row"><label for="zoom" class="dim small">seconds shown</label><input id="zoom" type="range" min="2" max="30" step="1" value="8"></div>
+    </div>
+    <div class="card">
+      <h2>Notes</h2>
+      <textarea id="notes" placeholder="song, drummer, anything odd" aria-label="Notes"></textarea>
+    </div>
+  </aside>
+</div>
+
+<dialog id="helpDlg">
+  <form method="dialog">
+    <h2 style="margin-top:0">How to label</h2>
+    <p class="small dim">Open a WAV (capture one with <code>tools/capture-song.sh</code>). The picture shows what rises in the sound: a drum is a vertical bar through many rows, the bass stays low, a held note is dark. Do one pass per drum type at 0.5× and tap each hit; the tap snaps to the sharpest onset of that kind within a fraction of a second. Then turn on the detector's marks and fix what you missed. Export, and put the file in <code>gpu/labels/</code>.</p>
+    <table class="small">
+      <tr><td><kbd>K</kbd> <kbd>T</kbd> <kbd>S</kbd> <kbd>H</kbd> <kbd>C</kbd></td><td>tap kick, tom, snare, hat, cymbal (hold <kbd>Shift</kbd> for a ghost note: soft, not asked of the detector)</td></tr>
+      <tr><td><kbd>Space</kbd></td><td>tap the highlighted drum (one pass per drum: pick it, then tap on <kbd>Space</kbd>)</td></tr>
+      <tr><td><kbd>Enter</kbd> / <kbd>P</kbd></td><td>play / pause</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>back / forward 1 s (<kbd>Shift</kbd>: 5 s)</td></tr>
+      <tr><td><kbd>1</kbd>–<kbd>4</kbd></td><td>speed 1×, 0.75×, 0.5×, 0.35×</td></tr>
+      <tr><td><kbd>Backspace</kbd> / <kbd>Ctrl+Z</kbd></td><td>undo the last mark, region or edit</td></tr>
+      <tr><td><kbd>E</kbd></td><td>edit: click the picture to add a mark of the highlighted drum, click one of your marks to delete it, click a detector mark in its lane to accept it</td></tr>
+      <tr><td><kbd>V</kbd></td><td>show or hide the detector's marks (hollow); bright ones have no mark of yours near them</td></tr>
+      <tr><td><kbd>I</kbd> <kbd>O</kbd></td><td>start and end of the excerpt you label (<kbd>Shift+I</kbd> clears); <kbd>L</kbd> loops it</td></tr>
+      <tr><td><kbd>N</kbd></td><td>start, then end, a stretch with no drums in it (counts false hits)</td></tr>
+      <tr><td>mouse</td><td>click the picture to seek, drag to pan, wheel to zoom</td></tr>
+      <tr><td><kbd>Ctrl+S</kbd></td><td>export; the work is also kept in this browser as you go</td></tr>
+    </table>
+    <p style="text-align:right;margin-bottom:0"><button value="close">Close</button></p>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+(() => {
+  // ---------------------------------------------------------------------------------------------- constants
+  const N = 1024;                       // the app's analysis window (21 ms at 48 kHz)
+  const ROWS = 160, FMIN = 30, FMAX = 16000;
+  const KINDS = ['kick', 'tom', 'snare', 'hat', 'cymbal'];
+  const CLASS_OF = { kick: 0, tom: 0, snare: 1, hat: 2, cymbal: 2 };
+  const DEFAULT_KIND = ['kick', 'snare', 'hat'];
+  const COLORS = { kick: '#ff5a5a', tom: '#ff7bff', snare: '#ffd23f', hat: '#4fd8ff', cymbal: '#ffffff' };
+  const KEY_KIND = { k: 'kick', t: 'tom', s: 'snare', h: 'hat', c: 'cymbal' };
+  const KEY_OF = { kick: 'K', tom: 'T', snare: 'S', hat: 'H', cymbal: 'C' };
+  const LANE_NAMES = ['kick · tom', 'snare', 'hat · cymbal'];
+  // How far after a drum's start the flux peak of each band (low, snare, high) falls, in ms: measured by snapping simulated
+  // taps (the true time, a random error of +-40 ms) on rendered drums with exact times; the medians were 3.9, 1.4 and 1.7.
+  const FLUX_LAG_MS = [4, 1.5, 2];
+  const RATES = [1, 0.75, 0.5, 0.35];
+  const $ = id => document.getElementById(id);
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+  const S = {
+    ctx: null, buf: null, name: '', size: 0, sr: 48000, dur: 0,
+    hop: 120, frames: 0, dstep: 4, cols: 0, g: 2000, imgGain: 1,
+    mag: null, img: null, ovw: null, flux: null, gate: [0, 0, 0],
+    labels: [], proposals: [], noDrums: [], pending: null, excerpt: null, split: 'dev', notes: '',
+    undo: [], nextId: 1,
+    active: 'kick', edit: false, showProp: false, loop: false,
+    rate: 0.5, latencyMs: 120, playing: false, pos: 0, src: null, startCtx: 0, startMedia: 0,
+    view: { t0: 0, span: 8 }, followHold: 0, dirty: true, drag: null,
+    cal: { active: false, clicks: [], taps: [] },
+    analysing: false,
+  };
+
+  // ---------------------------------------------------------------------------------------------- FFT
+  function makeFFT(n) {
+    const rev = new Uint32Array(n), bits = Math.log2(n);
+    for (let i = 0; i < n; i++) { let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); rev[i] = r; }
+    const cs = new Float32Array(n / 2), sn = new Float32Array(n / 2);
+    for (let k = 0; k < n / 2; k++) { cs[k] = Math.cos(2 * Math.PI * k / n); sn[k] = Math.sin(2 * Math.PI * k / n); }
+    return (re, im) => {
+      for (let i = 0; i < n; i++) { const j = rev[i]; if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+      for (let size = 2; size <= n; size <<= 1) {
+        const half = size >> 1, step = n / size;
+        for (let i = 0; i < n; i += size) {
+          for (let j = i, k = 0; j < i + half; j++, k += step) {
+            const l = j + half;
+            const tr = re[l] * cs[k] + im[l] * sn[k], ti = im[l] * cs[k] - re[l] * sn[k];
+            re[l] = re[j] - tr; im[l] = im[j] - ti; re[j] += tr; im[j] += ti;
+          }
+        }
+      }
+    };
+  }
+
+  // ---------------------------------------------------------------------------------------------- analysis
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  function setProgress(f) {
+    const p = $('progress'); p.style.display = f >= 1 || f < 0 ? 'none' : 'block'; p.firstElementChild.style.width = (f * 100) + '%';
+  }
+  function status(msg) { $('status').textContent = msg; }
+
+  async function analyze(buf) {
+    S.analysing = true;
+    const sr = buf.sampleRate, len = buf.length, nch = buf.numberOfChannels;
+    S.sr = sr; S.dur = buf.duration;
+    const mono = new Float32Array(len);
+    for (let c = 0; c < nch; c++) { const d = buf.getChannelData(c); for (let i = 0; i < len; i++) mono[i] += d[i] / nch; }
+    // loudness: scale the picture so a typical loud passage reads like the app's
+    const blocks = [];
+    for (let i = 0; i + 1024 <= len; i += 1024) { let s = 0; for (let j = 0; j < 1024; j++) s += mono[i + j] * mono[i + j]; blocks.push(Math.sqrt(s / 1024)); }
+    blocks.sort((a, b) => a - b);
+    const p98 = blocks.length ? blocks[Math.floor(blocks.length * 0.98)] : 0.05;
+    S.g = 2000 * clamp(0.1 / Math.max(p98, 1e-4), 0.1, 30);
+    const hop = Math.max(1, Math.round(sr * 0.0025)); S.hop = hop;
+    const frames = Math.max(0, Math.floor((len - N) / hop) + 1);
+    S.frames = frames; S.dstep = 4;
+    const cols = Math.floor((frames - 1) / S.dstep) + 1; S.cols = Math.max(cols, 1);
+    S.mag = new Float32Array(S.cols * ROWS);
+    S.flux = [new Float32Array(frames), new Float32Array(frames), new Float32Array(frames)];
+    const fft = makeFFT(N), win = new Float32Array(N);
+    for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+    const re = new Float32Array(N), im = new Float32Array(N), mags = new Float32Array(N / 2 + 1);
+    const ring = Array.from({ length: 8 }, () => new Float32Array(401));
+    const rowLo = new Uint16Array(ROWS), rowHi = new Uint16Array(ROWS);
+    for (let r = 0; r < ROWS; r++) {
+      const f = FMIN * Math.pow(FMAX / FMIN, r / (ROWS - 1)), k = Math.round(f / (sr / N));
+      rowLo[r] = Math.max(1, k - 1); rowHi[r] = Math.min(N / 2, k + 1);
+    }
+    const g = S.g;
+    for (let t = 0; t < frames; t++) {
+      const s0 = t * hop;
+      for (let i = 0; i < N; i++) { re[i] = mono[s0 + i] * win[i]; im[i] = 0; }
+      fft(re, im);
+      for (let k = 0; k <= N / 2; k++) mags[k] = Math.sqrt(re[k] * re[k] + im[k] * im[k]) / 256;
+      const cur = ring[t & 7];
+      for (let k = 1; k <= 400; k++) cur[k] = Math.log1p(g * mags[k]);
+      if (t >= 6) {
+        const a = ring[(t - 4) & 7], b = ring[(t - 6) & 7];
+        let lo = 0, sn = 0, hi = 0;
+        for (let k = 1; k <= 400; k++) {
+          const ref = a[k] > b[k] ? a[k] : b[k], d = cur[k] - ref;
+          if (d > 0) { if (k <= 6) lo += d; if (k >= 2 && k <= 260) sn += d; if (k >= 90) hi += d; }
+        }
+        S.flux[0][t] = lo / 6; S.flux[1][t] = sn / 259; S.flux[2][t] = hi / 311;
+      }
+      if (t % S.dstep === 0) {
+        const col = t / S.dstep;
+        for (let r = 0; r < ROWS; r++) { let m = 0; for (let k = rowLo[r]; k <= rowHi[r]; k++) if (mags[k] > m) m = mags[k]; S.mag[col * ROWS + r] = m; }
+      }
+      if ((t & 1023) === 1023) { setProgress(t / frames); await tick(); }
+    }
+    // a peak must clear a gate to count as an onset when a tap is snapped
+    for (let c = 0; c < 3; c++) {
+      const sub = []; for (let i = 0; i < frames; i += 5) sub.push(S.flux[c][i]);
+      sub.sort((a, b) => a - b);
+      S.gate[c] = 0.12 * (sub.length ? sub[Math.floor(sub.length * 0.99)] : 0);
+    }
+    setProgress(-1);
+    buildImage();
+    S.analysing = false;
+  }
+
+  function buildImage() {
+    if (!S.mag) return;
+    const cols = S.cols, lev = new Float32Array(cols * ROWS), gg = S.g * S.imgGain;
+    for (let i = 0; i < lev.length; i++) lev[i] = Math.log1p(gg * S.mag[i]);
+    const img = new Uint8Array(cols * ROWS), ovw = new Float32Array(cols);
+    for (let c = 2; c < cols; c++) {
+      let sum = 0;
+      for (let r = 0; r < ROWS; r++) {
+        const d = lev[c * ROWS + r] - lev[(c - 2) * ROWS + r];
+        const v = d > 0 ? Math.pow(Math.min(1, d / 2.5), 0.7) : 0;
+        img[c * ROWS + r] = v * 255; sum += v;
+      }
+      ovw[c] = sum / ROWS;
+    }
+    S.img = img; S.ovw = ovw; S.dirty = true;
+  }
+
+  const colTime = c => (c * S.dstep * S.hop + N / 2) / S.sr;
+  const frameTime = (i, cls) => (i * S.hop + N / 2) / S.sr - FLUX_LAG_MS[cls] / 1000;
+
+  // The onset of this kind's band that a tap at time t most likely meant: among the flux peaks near it, the one with the
+  // best sharpness / distance trade (a peak 40 ms away needs to be twice as sharp as one right at the tap), so a soft hat
+  // is not swapped for a louder neighbour 120 ms off. A tap is a few tens of ms off; the sound is not.
+  function snap(kind, t, before = 0.10, after = 0.05) {
+    const cls = CLASS_OF[kind], F = S.flux && S.flux[cls];
+    if (!F) return { ok: false, t };
+    const lag = FLUX_LAG_MS[cls] / 1000;
+    const iFrom = Math.max(7, Math.ceil(((t - before + lag) * S.sr - N / 2) / S.hop));
+    const iTo = Math.min(F.length - 2, Math.floor(((t + after + lag) * S.sr - N / 2) / S.hop));
+    let best = -1, bestScore = 0;
+    for (let i = iFrom; i <= iTo; i++) {
+      if (F[i] < S.gate[cls] || F[i] < F[i - 1] || F[i] <= F[i + 1]) continue;       // a local peak above the gate
+      const dt = frameTime(i, cls) - t, score = F[i] / (1 + (dt / 0.04) * (dt / 0.04));
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    if (best < 0) return { ok: false, t };
+    // parabolic refinement between the neighbouring frames
+    const a = F[best - 1], b = F[best], c = F[best + 1], den = a - 2 * b + c;
+    const off = den < 0 ? clamp(0.5 * (a - c) / den, -0.5, 0.5) : 0;
+    return { ok: true, t: frameTime(best + off, cls) };
+  }
+
+  // ---------------------------------------------------------------------------------------------- audio
+  function ensureCtx() {
+    if (!S.ctx) {
+      try { S.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 }); }
+      catch (e) { S.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+    }
+    if (S.ctx.state === 'suspended') S.ctx.resume();
+    return S.ctx;
+  }
+  // The context time that is leaving the speakers at performance time p (ms): what the listener hears at that moment.
+  function ctxTimeAt(p) {
+    const c = S.ctx;
+    if (c.getOutputTimestamp) {
+      const ts = c.getOutputTimestamp();
+      if (ts && ts.performanceTime > 0) return ts.contextTime + (p - ts.performanceTime) / 1000;
+    }
+    return c.currentTime - (c.outputLatency || 0) - (c.baseLatency || 0) + (p - performance.now()) / 1000;
+  }
+  function mediaNow(p = performance.now()) {
+    if (!S.playing) return S.pos;
+    return clamp(S.startMedia + Math.max(0, ctxTimeAt(p) - S.startCtx) * S.rate, 0, S.dur);
+  }
+  function stopSource() {
+    if (S.src) { S.src.onended = null; try { S.src.stop(); } catch (e) { /* already stopped */ } S.src.disconnect(); S.src = null; }
+  }
+  function play() {
+    if (!S.buf) return;
+    ensureCtx();
+    if (S.pos >= S.dur - 0.05) S.pos = S.excerpt ? S.excerpt[0] : 0;
+    stopSource();
+    const src = S.ctx.createBufferSource();
+    src.buffer = S.buf; src.playbackRate.value = S.rate; src.connect(S.ctx.destination);
+    const when = S.ctx.currentTime + 0.03;
+    src.start(when, S.pos);
+    src.onended = () => { if (S.src === src) { S.playing = false; S.src = null; S.pos = S.dur; updateButtons(); S.dirty = true; } };
+    S.src = src; S.startCtx = when; S.startMedia = S.pos; S.playing = true;
+    updateButtons();
+  }
+  function pause() {
+    if (!S.playing) return;
+    S.pos = mediaNow(); S.playing = false; stopSource(); updateButtons(); S.dirty = true;
+  }
+  function togglePlay() { S.playing ? pause() : play(); }
+  function seekTo(t) {
+    S.pos = clamp(t, 0, S.dur);
+    if (S.playing) { S.playing = false; stopSource(); play(); }
+    S.dirty = true;
+  }
+  function setRate(r) {
+    S.rate = r; $('rate').value = String(r);
+    if (S.playing) { S.pos = mediaNow(); S.playing = false; stopSource(); play(); }
+    savePrefs();
+  }
+
+  // ---------------------------------------------------------------------------------------------- labels
+  function pushUndo(u) { S.undo.push(u); if (S.undo.length > 500) S.undo.shift(); }
+  function addLabel(l, record = true) {
+    // one hit of a kind per 25 ms
+    if (S.labels.some(o => CLASS_OF[o.kind] === CLASS_OF[l.kind] && Math.abs(o.t - l.t) < 0.025)) { status('Already a ' + (CLASS_OF[l.kind] === 0 ? 'low' : CLASS_OF[l.kind] === 1 ? 'snare' : 'high') + ' mark there.'); return null; }
+    l.id = S.nextId++;
+    S.labels.push(l); S.labels.sort((a, b) => a.t - b.t);
+    if (record) pushUndo({ type: 'add', id: l.id });
+    changed();
+    return l;
+  }
+  function removeLabel(id, record = true) {
+    const i = S.labels.findIndex(l => l.id === id);
+    if (i < 0) return;
+    const [l] = S.labels.splice(i, 1);
+    if (record) pushUndo({ type: 'del', label: l });
+    changed();
+  }
+  function undo() {
+    const u = S.undo.pop();
+    if (!u) { status('Nothing to undo.'); return; }
+    if (u.type === 'add') removeLabel(u.id, false);
+    else if (u.type === 'del') { S.labels.push(u.label); S.labels.sort((a, b) => a.t - b.t); changed(); }
+    else if (u.type === 'region') { S.noDrums = S.noDrums.filter(r => r.id !== u.id); changed(); }
+    else if (u.type === 'regiondel') { S.noDrums.push(u.region); S.noDrums.sort((a, b) => a.a - b.a); changed(); }
+    else if (u.type === 'excerpt') { S.excerpt = u.prev; changed(); }
+  }
+  function onTap(kind, ghost, perf) {
+    if (!S.buf) return;
+    if (!S.playing) { status('Press play first, then tap.'); return; }
+    const heard = mediaNow(perf), corrected = heard - (S.latencyMs / 1000) * S.rate;
+    const sn = snap(kind, corrected, 0.10 * Math.max(0.5, S.rate) + 0.05, 0.05);
+    const l = addLabel({ t: sn.t, raw: corrected, kind, ghost: !!ghost, snapped: sn.ok, source: 'tap' });
+    if (l) status(KEY_OF[kind] + (ghost ? ' ghost' : '') + ' at ' + fmt(l.t) + (sn.ok ? ' (snapped ' + Math.round((sn.t - corrected) * 1000) + ' ms)' : ' (no onset near it: kept where tapped)'));
+  }
+  function setActive(kind) { S.active = kind; renderKinds(); }
+  function changed() { S.dirty = true; renderSide(); autosave(); }
+
+  // ---------------------------------------------------------------------------------------------- persistence
+  const storeKey = () => 'geqlabel:v1:' + S.name + ':' + S.size;
+  function savePrefs() { try { localStorage.setItem('geqlabel:prefs', JSON.stringify({ latencyMs: S.latencyMs, rate: S.rate })); } catch (e) { /* private mode */ } }
+  function loadPrefs() {
+    try { const p = JSON.parse(localStorage.getItem('geqlabel:prefs') || '{}'); if (typeof p.latencyMs === 'number') S.latencyMs = p.latencyMs; if (RATES.concat([0.25]).includes(p.rate)) S.rate = p.rate; } catch (e) { /* ignore */ }
+  }
+  function toObject() {
+    const r3 = v => Math.round(v * 1000) / 1000;
+    return {
+      version: 1, tool: 'labeler.html',
+      audio: { name: S.name, duration: r3(S.dur), size: S.size, sampleRate: S.sr },
+      split: S.split, excerpt: S.excerpt ? [r3(S.excerpt[0]), r3(S.excerpt[1])] : null, tapLatencyMs: S.latencyMs,
+      labels: S.labels.map(l => ({ t: r3(l.t), kind: l.kind, ghost: !!l.ghost, snapped: !!l.snapped, source: l.source || 'tap' })),
+      noDrums: S.noDrums.map(r => [r3(r.a), r3(r.b)]), notes: S.notes, savedAt: new Date().toISOString(),
+    };
+  }
+  function applyObject(o, fromStore) {
+    if (!o || !Array.isArray(o.labels)) throw new Error('not a labels file');
+    if (!fromStore && o.audio && S.name && o.audio.name && o.audio.name !== S.name) status('Note: these labels are for ' + o.audio.name + '.');
+    S.labels = o.labels.filter(l => KINDS.includes(l.kind) && typeof l.t === 'number').map(l => ({ id: S.nextId++, t: l.t, raw: l.t, kind: l.kind, ghost: !!l.ghost, snapped: l.snapped !== false, source: l.source || 'tap' }));
+    S.labels.sort((a, b) => a.t - b.t);
+    S.noDrums = (o.noDrums || []).map(r => ({ id: S.nextId++, a: r[0], b: r[1] }));
+    S.excerpt = Array.isArray(o.excerpt) ? [o.excerpt[0], o.excerpt[1]] : null;
+    S.split = o.split === 'test' ? 'test' : 'dev'; $('split').value = S.split;
+    S.notes = o.notes || ''; $('notes').value = S.notes;
+    if (typeof o.tapLatencyMs === 'number' && !fromStore) { S.latencyMs = o.tapLatencyMs; $('latency').value = S.latencyMs; }
+    S.undo = []; S.dirty = true; renderSide();
+  }
+  let saveTimer = 0;
+  function autosave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { if (!S.name) return; try { localStorage.setItem(storeKey(), JSON.stringify(toObject())); } catch (e) { /* ignore */ } }, 300);
+  }
+  function exportJSON() {
+    if (!S.buf) return;
+    const blob = new Blob([JSON.stringify(toObject(), null, 1)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = S.name.replace(/\.[^.]+$/, '') + '.labels.json'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    status('Exported ' + S.labels.length + ' marks to ' + a.download + '. Put it in gpu/labels/.');
+  }
+
+  // ---------------------------------------------------------------------------------------------- loading
+  async function openAudio(arrayBuffer, name, size) {
+    pause(); stopSource();
+    status('Decoding…'); setProgress(0);
+    ensureCtx();
+    let buf;
+    try { buf = await S.ctx.decodeAudioData(arrayBuffer.slice(0)); }
+    catch (e) { setProgress(-1); status('Could not decode ' + name + ': ' + (e && e.message || e)); return false; }
+    S.buf = buf; S.name = name; S.size = size; S.pos = 0; S.labels = []; S.proposals = []; S.noDrums = []; S.excerpt = null; S.undo = []; S.pending = null;
+    $('name').textContent = name + ' · ' + fmt(buf.duration);
+    status('Analysing…');
+    await analyze(buf);
+    S.view.t0 = 0;
+    try {
+      const saved = localStorage.getItem(storeKey());
+      if (saved) { applyObject(JSON.parse(saved), true); status('Restored ' + S.labels.length + ' marks kept in this browser.'); }
+      else status('Ready. Press Enter to play, then tap K, S or H (or pick a drum and tap Space).');
+    } catch (e) { status('Ready.'); }
+    updateButtons(); renderSide(); S.dirty = true;
+    return true;
+  }
+  function loadProposals(o) {
+    if (!o || !Array.isArray(o.hits)) throw new Error('not a proposals file');
+    S.proposals = o.hits.map(h => ({ t: h.t, cls: h.class, p: h.p }));
+    $('viewProp').disabled = false; S.dirty = true;
+    status(S.proposals.length + ' detector marks loaded (hidden until you press V).');
+  }
+  async function readJSON(file) { return JSON.parse(await file.text()); }
+
+  // ---------------------------------------------------------------------------------------------- calibration
+  function calibrate() {
+    if (!S.buf && !S.ctx) ensureCtx();
+    ensureCtx(); pause();
+    const c = S.ctx, cal = S.cal;
+    cal.active = true; cal.clicks = []; cal.taps = [];
+    let t = c.currentTime + 1.0;
+    for (let i = 0; i < 24; i++) {
+      const o = c.createOscillator(), g = c.createGain();
+      o.frequency.value = 1000; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.5, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+      o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + 0.05);
+      cal.clicks.push(t); t += 0.45 + Math.random() * 0.65;   // unpredictable gaps: you must react, as to a drum you did not expect
+    }
+    $('calInfo').textContent = 'Tap Space on every click (24 of them, irregular).';
+    cal.end = setTimeout(finishCalibration, (t - c.currentTime + 0.8) * 1000);
+  }
+  function calTap(perf) {
+    const cal = S.cal, ct = ctxTimeAt(perf);
+    let best = -1, bd = 0.6;
+    cal.clicks.forEach((c, i) => { const d = ct - c; if (d > -0.15 && d < bd && !cal.taps.some(x => x.i === i)) { bd = d; best = i; } });
+    if (best >= 0) { cal.taps.push({ i: best, off: ct - cal.clicks[best] }); $('calInfo').textContent = 'Tapped ' + cal.taps.length + ' of 24…'; }
+  }
+  function finishCalibration() {
+    const cal = S.cal; cal.active = false;
+    const offs = cal.taps.filter(x => x.i >= 4).map(x => x.off * 1000).sort((a, b) => a - b);
+    if (offs.length < 8) { $('calInfo').textContent = 'Too few taps (' + cal.taps.length + '). Try again.'; return; }
+    const med = offs[Math.floor(offs.length / 2)], iqr = offs[Math.floor(offs.length * 0.75)] - offs[Math.floor(offs.length * 0.25)];
+    S.latencyMs = Math.round(med); $('latency').value = S.latencyMs; savePrefs();
+    $('calInfo').textContent = 'Your taps land ' + S.latencyMs + ' ms after the sound (spread ' + Math.round(iqr) + ' ms).' + (iqr > 80 ? ' That is loose; try again, or tap at a lower speed.' : '');
+  }
+
+  // ---------------------------------------------------------------------------------------------- drawing
+  const IMG_H = 300, LANE_H = 24, AXIS_H = 20;
+  const mainCv = $('main'), mainCtx = mainCv.getContext('2d'), ovCv = $('overview'), ovCtx = ovCv.getContext('2d');
+  const off = document.createElement('canvas'), offCtx = off.getContext('2d');
+  let W = 0, H = 0, dpr = 1;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    const r = mainCv.getBoundingClientRect(); W = Math.max(200, Math.floor(r.width)); H = IMG_H + LANE_H * 3 + AXIS_H;
+    mainCv.style.height = H + 'px'; mainCv.width = W * dpr; mainCv.height = H * dpr;
+    const o = ovCv.getBoundingClientRect(); ovCv.width = Math.floor(o.width * dpr); ovCv.height = Math.floor(56 * dpr);
+    S.dirty = true;
+  }
+  const xOf = t => (t - S.view.t0) / S.view.span * W;
+  const tOf = x => S.view.t0 + x / W * S.view.span;
+
+  function drawMain() {
+    const c = mainCtx; c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.fillStyle = '#080b10'; c.fillRect(0, 0, W, H);
+    if (!S.img) {
+      c.fillStyle = '#5b6674'; c.font = '14px system-ui'; c.textAlign = 'center';
+      c.fillText(S.analysing ? 'Analysing…' : 'Open a WAV to see its onsets here', W / 2, IMG_H / 2); return;
+    }
+    // onset image
+    off.width = W; off.height = ROWS;
+    const id = offCtx.createImageData(W, ROWS), d = id.data, stride = S.dstep * S.hop;
+    for (let x = 0; x < W; x++) {
+      const col = Math.round((tOf(x) * S.sr - N / 2) / stride);
+      if (col < 2 || col >= S.cols) continue;
+      for (let r = 0; r < ROWS; r++) {
+        const v = S.img[col * ROWS + r], o = ((ROWS - 1 - r) * W + x) * 4;
+        d[o] = v * 0.95; d[o + 1] = v * 0.9; d[o + 2] = v * 0.8 + (v > 0 ? 18 : 0); d[o + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    c.imageSmoothingEnabled = false; c.drawImage(off, 0, 0, W, ROWS, 0, 0, W, IMG_H);
+    // shading: outside the excerpt dimmed, no-drum stretches tinted
+    if (S.excerpt) {
+      c.fillStyle = 'rgba(0,0,0,.55)';
+      const a = xOf(S.excerpt[0]), b = xOf(S.excerpt[1]);
+      if (a > 0) c.fillRect(0, 0, Math.min(W, a), IMG_H + LANE_H * 3);
+      if (b < W) c.fillRect(Math.max(0, b), 0, W - Math.max(0, b), IMG_H + LANE_H * 3);
+      c.strokeStyle = '#4fd8ff'; c.lineWidth = 1; c.setLineDash([4, 3]);
+      for (const t of S.excerpt) { const x = xOf(t); if (x >= 0 && x <= W) { c.beginPath(); c.moveTo(x + .5, 0); c.lineTo(x + .5, IMG_H + LANE_H * 3); c.stroke(); } }
+      c.setLineDash([]);
+    }
+    c.fillStyle = 'rgba(70,110,255,.16)';
+    for (const r of S.noDrums) { const a = xOf(r.a), b = xOf(r.b); if (b > 0 && a < W) c.fillRect(Math.max(0, a), 0, Math.min(W, b) - Math.max(0, a), IMG_H + LANE_H * 3); }
+    if (S.pending !== null) { const x = xOf(S.pending); c.strokeStyle = '#6f8cff'; c.setLineDash([3, 3]); c.beginPath(); c.moveTo(x + .5, 0); c.lineTo(x + .5, H); c.stroke(); c.setLineDash([]); }
+    // lanes
+    for (let k = 0; k < 3; k++) {
+      const y = IMG_H + k * LANE_H;
+      c.fillStyle = k % 2 ? '#0d1218' : '#0a0e13'; c.fillRect(0, y, W, LANE_H);
+      c.fillStyle = '#5b6674'; c.font = '11px system-ui'; c.textAlign = 'left'; c.fillText(LANE_NAMES[k], 6, y + 15);
+    }
+    // time axis
+    const steps = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30], px = S.view.span / W;
+    const stepT = steps.find(s => s / px >= 70) || 60;
+    c.fillStyle = '#8b97a6'; c.font = '11px ui-monospace, monospace'; c.textAlign = 'left';
+    const y0 = IMG_H + LANE_H * 3;
+    for (let t = Math.ceil(S.view.t0 / stepT) * stepT; t < S.view.t0 + S.view.span; t += stepT) {
+      const x = xOf(t); c.fillRect(Math.round(x), y0, 1, 5); c.fillText(fmtShort(t), x + 3, y0 + 15);
+      c.fillStyle = 'rgba(255,255,255,.07)'; c.fillRect(Math.round(x), 0, 1, y0); c.fillStyle = '#8b97a6';
+    }
+    // detector marks
+    if (S.showProp) {
+      for (const p of S.proposals) {
+        const x = xOf(p.t); if (x < -6 || x > W + 6) continue;
+        const kind = DEFAULT_KIND[p.cls], covered = S.labels.some(l => CLASS_OF[l.kind] === p.cls && Math.abs(l.t - p.t) < 0.07);
+        const y = IMG_H + p.cls * LANE_H;
+        c.strokeStyle = COLORS[kind]; c.globalAlpha = covered ? 0.3 : (0.45 + 0.55 * clamp((p.p - 0.4) / 0.6, 0, 1)); c.lineWidth = covered ? 1 : 2;
+        c.beginPath(); c.moveTo(x - 4, y + LANE_H - 3); c.lineTo(x, y + 4); c.lineTo(x + 4, y + LANE_H - 3); c.closePath(); c.stroke();
+        c.globalAlpha = 1;
+      }
+    }
+    // marks
+    for (const l of S.labels) {
+      const x = xOf(l.t); if (x < -6 || x > W + 6) continue;
+      const cls = CLASS_OF[l.kind], y = IMG_H + cls * LANE_H;
+      c.strokeStyle = COLORS[l.kind]; c.globalAlpha = l.ghost ? 0.4 : 0.35; c.lineWidth = 1; c.beginPath(); c.moveTo(x + .5, 0); c.lineTo(x + .5, IMG_H); c.stroke();
+      c.globalAlpha = l.ghost ? 0.55 : 1; c.lineWidth = 2; c.beginPath(); c.moveTo(x, y + 3); c.lineTo(x, y + LANE_H - 3); c.stroke();
+      c.fillStyle = COLORS[l.kind];
+      if (l.kind === 'tom') { c.beginPath(); c.arc(x, y + 5, 3, 0, 7); c.fill(); }
+      if (l.kind === 'cymbal') { c.fillRect(x - 3, y + 3, 7, 2); }
+      if (!l.snapped) { c.fillRect(x - 3, y + LANE_H - 5, 7, 2); }
+      c.globalAlpha = 1;
+    }
+    // playhead
+    const px2 = xOf(S.playing ? S.pos : S.pos);
+    if (px2 >= 0 && px2 <= W) { c.strokeStyle = '#ffffff'; c.lineWidth = 1; c.beginPath(); c.moveTo(Math.round(px2) + .5, 0); c.lineTo(Math.round(px2) + .5, IMG_H + LANE_H * 3); c.stroke(); }
+  }
+
+  function drawOverview() {
+    const c = ovCtx, w = ovCv.width, h = ovCv.height; c.setTransform(1, 0, 0, 1, 0, 0);
+    c.fillStyle = '#080b10'; c.fillRect(0, 0, w, h);
+    if (!S.ovw || !S.dur) return;
+    const per = S.cols / w;
+    c.fillStyle = '#c7d4e2';
+    for (let x = 0; x < w; x++) {
+      let m = 0; const a = Math.floor(x * per), b = Math.max(a + 1, Math.floor((x + 1) * per));
+      for (let i = a; i < b && i < S.cols; i++) if (S.ovw[i] > m) m = S.ovw[i];
+      const bh = Math.min(1, m * 5) * (h - 6); c.fillRect(x, h - 2 - bh, 1, bh);
+    }
+    const X = t => t / S.dur * w;
+    c.fillStyle = 'rgba(70,110,255,.28)'; for (const r of S.noDrums) c.fillRect(X(r.a), 0, X(r.b) - X(r.a), h);
+    if (S.excerpt) {
+      c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(0, 0, X(S.excerpt[0]), h); c.fillRect(X(S.excerpt[1]), 0, w - X(S.excerpt[1]), h);
+    }
+    for (const l of S.labels) { c.fillStyle = COLORS[l.kind]; c.globalAlpha = .8; c.fillRect(Math.floor(X(l.t)), 0, 1, 5); }
+    c.globalAlpha = 1;
+    c.strokeStyle = '#4fd8ff'; c.lineWidth = 1.5; c.strokeRect(X(S.view.t0), 1, Math.max(2, X(S.view.span)), h - 2);
+    c.fillStyle = '#fff'; c.fillRect(Math.round(X(S.pos)), 0, 1.5, h);
+  }
+
+  function fmt(t) { const m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(3); }
+  function fmtShort(t) { const m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + (s % 1 === 0 ? s.toFixed(0) : s.toFixed(2)); }
+
+  function frame() {
+    if (S.playing) {
+      S.pos = mediaNow();
+      if (S.loop && S.excerpt && S.pos >= S.excerpt[1]) seekTo(S.excerpt[0]);
+      if (performance.now() > S.followHold) S.view.t0 = S.pos - 0.3 * S.view.span;
+      S.dirty = true;
+    }
+    if (S.dirty) {
+      S.dirty = false;
+      $('time').textContent = fmt(S.pos);
+      drawMain(); drawOverview();
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // ---------------------------------------------------------------------------------------------- UI
+  function updateButtons() {
+    const has = !!S.buf;
+    $('play').disabled = !has; $('play').textContent = S.playing ? '❚❚ Pause' : '▶ Play';
+    for (const id of ['edit', 'loop', 'export', 'inBtn', 'outBtn', 'noBtn']) $(id).disabled = !has;
+    $('btnProp').disabled = !has; $('viewProp').disabled = !S.proposals.length;
+    $('edit').classList.toggle('on', S.edit); $('viewProp').classList.toggle('on', S.showProp); $('loop').classList.toggle('on', S.loop);
+    mainCv.classList.toggle('edit', S.edit);
+  }
+  function renderKinds() {
+    const box = $('kinds'); box.textContent = '';
+    for (const k of KINDS) {
+      const n = S.labels.filter(l => l.kind === k).length;
+      const b = document.createElement('button'); b.type = 'button'; b.className = k === S.active ? 'on' : '';
+      b.innerHTML = '<span class="sw" style="background:' + COLORS[k] + '"></span><span>' + k + ' <span class="dim">' + n + '</span></span><kbd>' + KEY_OF[k] + '</kbd>';
+      b.onclick = () => setActive(k); box.appendChild(b);
+    }
+  }
+  function renderSide() {
+    renderKinds();
+    $('excerpt').textContent = S.excerpt ? fmt(S.excerpt[0]) + ' – ' + fmt(S.excerpt[1]) + ' (' + Math.round(S.excerpt[1] - S.excerpt[0]) + ' s)' : 'whole file';
+    const ul = $('regions'); ul.textContent = '';
+    for (const r of S.noDrums) {
+      const li = document.createElement('li'); li.innerHTML = '<span>' + fmt(r.a) + ' – ' + fmt(r.b) + '</span>';
+      const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', 'Remove this no-drums stretch');
+      x.onclick = () => { S.noDrums = S.noDrums.filter(q => q.id !== r.id); pushUndo({ type: 'regiondel', region: r }); changed(); };
+      li.appendChild(x); ul.appendChild(li);
+    }
+    const legend = $('legend'); legend.textContent = '';
+    legend.innerHTML = KINDS.map(k => '<span><span style="color:' + COLORS[k] + '">●</span> ' + k + '</span>').join('') + '<span>▯ ghost</span><span>▭ untouched by snapping</span><span>△ detector</span>';
+  }
+
+  // pointer: click seeks, drag pans, wheel zooms; in edit mode a click adds or deletes
+  mainCv.addEventListener('pointerdown', e => {
+    if (!S.buf) return;
+    try { mainCv.setPointerCapture(e.pointerId); } catch (err) { /* synthetic or already released */ }
+    S.drag = { x0: e.clientX, t0: S.view.t0, moved: false, id: e.pointerId };
+  });
+  mainCv.addEventListener('pointermove', e => {
+    const d = S.drag; if (!d) return;
+    const dx = e.clientX - d.x0;
+    if (Math.abs(dx) > 4) d.moved = true;
+    if (d.moved && !S.edit) { S.view.t0 = d.t0 - dx / W * S.view.span; S.followHold = performance.now() + 4000; S.dirty = true; }
+  });
+  mainCv.addEventListener('pointerup', e => {
+    const d = S.drag; S.drag = null; if (!d || d.moved) return;
+    const r = mainCv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, t = tOf(x);
+    if (!S.edit) { seekTo(t); return; }
+    clickEdit(x, y, t, e.shiftKey);
+  });
+  function clickEdit(x, y, t, ghost) {
+    const lane = y >= IMG_H ? clamp(Math.floor((y - IMG_H) / LANE_H), 0, 2) : -1;
+    const dx = q => Math.abs(xOf(q.t) - x);
+    // your own mark near the click is deleted (in a lane: one of that lane's kinds; in the picture: any)
+    const near = S.labels.filter(l => (lane < 0 || CLASS_OF[l.kind] === lane) && dx(l) < 7).sort((a, b) => dx(a) - dx(b))[0];
+    if (near) { removeLabel(near.id); status('Deleted the ' + near.kind + ' at ' + fmt(near.t) + '.'); return; }
+    // a detector mark is accepted by clicking it in its lane
+    if (S.showProp && lane >= 0) {
+      const p = S.proposals.filter(q => q.cls === lane && dx(q) < 7).sort((a, b) => dx(a) - dx(b))[0];
+      if (p) {
+        const kind = CLASS_OF[S.active] === p.cls ? S.active : DEFAULT_KIND[p.cls];
+        const sn = snap(kind, p.t, 0.04, 0.04);
+        const l = addLabel({ t: sn.ok ? sn.t : p.t, raw: p.t, kind, ghost: !!ghost, snapped: sn.ok, source: 'proposal' });
+        if (l) status('Accepted the detector\'s ' + kind + ' at ' + fmt(l.t) + '.');
+        return;
+      }
+    }
+    // otherwise a new mark of the highlighted drum (in a lane, of that lane's kind)
+    const kind = lane >= 0 && CLASS_OF[S.active] !== lane ? DEFAULT_KIND[lane] : S.active;
+    const sn = snap(kind, t, 0.05, 0.05);
+    const l = addLabel({ t: sn.ok ? sn.t : t, raw: t, kind, ghost: !!ghost, snapped: sn.ok, source: 'edit' });
+    if (l) status('Added a ' + kind + ' at ' + fmt(l.t) + (sn.ok ? '.' : ' (no onset near the click: kept where clicked).'));
+  }
+  mainCv.addEventListener('wheel', e => {
+    if (!S.buf) return; e.preventDefault();
+    const r = mainCv.getBoundingClientRect(), x = e.clientX - r.left, tc = tOf(x);
+    if (e.shiftKey) { S.view.t0 += (e.deltaY + e.deltaX) / W * S.view.span * 0.5; }
+    else { const f = Math.exp(e.deltaY * 0.0015); S.view.span = clamp(S.view.span * f, 1, 60); S.view.t0 = tc - x / W * S.view.span; $('zoom').value = clamp(Math.round(S.view.span), 2, 30); }
+    S.followHold = performance.now() + 4000; S.dirty = true;
+  }, { passive: false });
+  ovCv.addEventListener('pointerdown', e => {
+    if (!S.buf) return;
+    const r = ovCv.getBoundingClientRect(); seekTo((e.clientX - r.left) / r.width * S.dur);
+    S.view.t0 = S.pos - 0.3 * S.view.span; S.followHold = 0;
+  });
+
+  function setExcerpt(which) {
+    if (!S.buf) return;
+    const prev = S.excerpt ? S.excerpt.slice() : null, t = S.pos;
+    let e = S.excerpt ? S.excerpt.slice() : [0, S.dur];
+    if (which === 'in') e[0] = t; else e[1] = t;
+    if (e[1] <= e[0]) { status('The end must come after the start.'); return; }
+    S.excerpt = e; pushUndo({ type: 'excerpt', prev }); changed();
+    status('Excerpt ' + fmt(e[0]) + ' – ' + fmt(e[1]));
+  }
+  function toggleNoDrums() {
+    if (!S.buf) return;
+    const t = S.pos;
+    if (S.pending === null) { S.pending = t; status('No-drums stretch started at ' + fmt(t) + '. Press N again where it ends (Esc cancels).'); S.dirty = true; return; }
+    const a = Math.min(S.pending, t), b = Math.max(S.pending, t); S.pending = null;
+    if (b - a < 0.3) { status('Too short.'); return; }
+    const r = { id: S.nextId++, a, b }; S.noDrums.push(r); S.noDrums.sort((x, y) => x.a - y.a); pushUndo({ type: 'region', id: r.id }); changed();
+    status('No drums from ' + fmt(a) + ' to ' + fmt(b) + '.');
+  }
+
+  window.addEventListener('keydown', e => {
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') { if (e.key === 'Escape') e.target.blur(); return; }
+    if (document.getElementById('helpDlg').open) return;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (e.ctrlKey || e.metaKey) {
+      if (key === 'z') { undo(); e.preventDefault(); } else if (key === 's') { exportJSON(); e.preventDefault(); }
+      return;
+    }
+    const tapKey = key === ' ' || KEY_KIND[key];
+    if (e.repeat) { if (tapKey) e.preventDefault(); return; }
+    if (S.cal.active && tapKey) { calTap(e.timeStamp); e.preventDefault(); return; }
+    if (KEY_KIND[key]) { setActive(KEY_KIND[key]); onTap(KEY_KIND[key], e.shiftKey, e.timeStamp); e.preventDefault(); return; }
+    switch (key) {
+      case ' ': onTap(S.active, e.shiftKey, e.timeStamp); e.preventDefault(); break;
+      case 'Enter': case 'p': togglePlay(); e.preventDefault(); break;
+      case 'ArrowLeft': seekTo(S.pos - (e.shiftKey ? 5 : 1)); e.preventDefault(); break;
+      case 'ArrowRight': seekTo(S.pos + (e.shiftKey ? 5 : 1)); e.preventDefault(); break;
+      case 'Backspace': case 'Delete': undo(); e.preventDefault(); break;
+      case 'e': S.edit = !S.edit; updateButtons(); break;
+      case 'v': if (S.proposals.length) { S.showProp = !S.showProp; updateButtons(); S.dirty = true; } else status('No detector marks loaded: open a .proposals.json.'); break;
+      case 'i': if (e.shiftKey) { S.excerpt = null; changed(); } else setExcerpt('in'); break;
+      case 'o': setExcerpt('out'); break;
+      case 'l': S.loop = !S.loop; updateButtons(); break;
+      case 'n': toggleNoDrums(); break;
+      case 'Escape': if (S.pending !== null) { S.pending = null; status('Cancelled.'); S.dirty = true; } break;
+      case '1': case '2': case '3': case '4': setRate(RATES[+key - 1]); break;
+      case '?': $('helpDlg').showModal(); break;
+      default: break;
+    }
+  });
+
+  $('play').onclick = togglePlay;
+  $('edit').onclick = () => { S.edit = !S.edit; updateButtons(); };
+  $('viewProp').onclick = () => { S.showProp = !S.showProp; updateButtons(); S.dirty = true; };
+  $('loop').onclick = () => { S.loop = !S.loop; updateButtons(); };
+  $('export').onclick = exportJSON;
+  $('help').onclick = () => $('helpDlg').showModal();
+  $('inBtn').onclick = () => setExcerpt('in'); $('outBtn').onclick = () => setExcerpt('out'); $('noBtn').onclick = toggleNoDrums;
+  $('calibrate').onclick = calibrate;
+  $('rate').onchange = e => { setRate(+e.target.value); e.target.blur(); };
+  $('split').onchange = e => { S.split = e.target.value; changed(); e.target.blur(); };
+  $('latency').onchange = e => { S.latencyMs = +e.target.value || 0; savePrefs(); };
+  $('notes').oninput = e => { S.notes = e.target.value; autosave(); };
+  $('gain').oninput = e => { S.imgGain = +e.target.value; buildImage(); };
+  $('zoom').oninput = e => { const c = S.view.t0 + S.view.span * 0.3; S.view.span = +e.target.value; S.view.t0 = c - 0.3 * S.view.span; S.dirty = true; };
+  $('fileAudio').onchange = async e => { const f = e.target.files[0]; if (f) await openAudio(await f.arrayBuffer(), f.name, f.size); e.target.value = ''; };
+  $('fileProp').onchange = async e => { const f = e.target.files[0]; try { if (f) loadProposals(await readJSON(f)); } catch (err) { status('Proposals: ' + err.message); } e.target.value = ''; };
+  $('fileLabels').onchange = async e => {
+    const f = e.target.files[0];
+    try { if (f) { applyObject(await readJSON(f), false); changed(); status('Loaded ' + S.labels.length + ' marks.'); } } catch (err) { status('Labels: ' + err.message); }
+    e.target.value = '';
+  };
+  // a button that keeps the focus would also act on Space and Enter, which are taps and play here
+  document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('button'); if (b) b.blur(); });
+  window.addEventListener('resize', resize);
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', async e => {
+    e.preventDefault();
+    for (const f of e.dataTransfer.files) {
+      if (/\.json$/i.test(f.name)) { try { const o = await readJSON(f); if (o.hits) loadProposals(o); else { applyObject(o, false); changed(); } } catch (err) { status(f.name + ': ' + err.message); } }
+      else await openAudio(await f.arrayBuffer(), f.name, f.size);
+    }
+  });
+
+  // ---------------------------------------------------------------------------------------------- start
+  loadPrefs(); $('latency').value = S.latencyMs; $('rate').value = String(S.rate);
+  renderSide(); resize(); requestAnimationFrame(frame);
+  // ?audio=URL&proposals=URL&labels=URL fetch what to open (for serving a folder with python -m http.server)
+  const q = new URLSearchParams(location.search);
+  const ready = (async () => {
+    try {
+      if (q.get('audio')) {
+        const r = await fetch(q.get('audio')); const b = await r.arrayBuffer();
+        await openAudio(b, decodeURIComponent(q.get('audio').split('/').pop()), b.byteLength);
+        if (q.get('proposals')) loadProposals(await (await fetch(q.get('proposals'))).json());
+        if (q.get('labels')) { applyObject(await (await fetch(q.get('labels'))).json(), false); changed(); }
+      }
+    } catch (e) { status('Could not load from the address: ' + e.message); }
+  })();
+  // a hook for tests and scripts
+  window.GL = { S, snap, addLabel, onTap, toObject, applyObject, analyze, openAudio, mediaNow, ready, FLUX_LAG_MS, CLASS_OF, setFluxLag: (a) => { for (let i = 0; i < 3; i++) FLUX_LAG_MS[i] = a[i]; } };
+})();
+</script>
+</body>
+</html>

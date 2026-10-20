@@ -1,5 +1,9 @@
 # GPU analyzer — visual direction and implementation plan
 
+> Retired on 2026-10-19: Spectrum Tunnel, Vectorscope, Smoke Jets and Chladni Sand.
+> Their implementations, looks and controls have been removed. The sections below retain the historical
+> design and measurement record; these four scenes are no longer planned or available.
+
 Written 2026-10-11 against commit `a3579ea`. Sized for the machine it runs on: Radeon RX 580 8 GB
 (RADV, Vulkan 1.4) driving a 5120×1440 display at 120 Hz.
 
@@ -908,6 +912,8 @@ because thousands of jets were alive at once; sparks only fly when something is 
 
 ## Milestone 3b: from spectrum driven to beat driven (the Fountain)
 
+*Later: the drum classifier that was tried and discarded below was eventually built as a trained model, and now drives the Sparks, Fireworks, Lightning Storm and Ripple Pond (Milestone 11). The Fountain still works as described here.*
+
 The first Fountain launched jets by *level* (frequency driven). The request was to make it beat driven:
 bass drums toward the left, snares toward the right, sparks flying on a hit and bigger the more pronounced
 the hit. Two routes were tried.
@@ -1363,6 +1369,8 @@ two screen passes). The one hitch of the run (p95 25 ms over 20 frames, the log'
 
 ## Milestone 8: Fireworks (scene 10 in the table, ID 9)
 
+*Its hits no longer come from `modulation::RiseHits` (described below); see Milestone 11. `RiseHits` is kept as the test baseline.*
+
 Rockets climb a dark sky while the music is loud, and a hit sets one off. IDs: 9 = Fireworks.
 
 **Shipped**
@@ -1487,6 +1495,8 @@ At most 23% of the sky region is lit (any channel above 45/255) in the dense cap
 
 ## Milestone 9: Lightning Storm (scene 11 in the table, ID 10)
 
+*Its hits no longer come from `modulation::RiseHits` (described below); see Milestone 11. `RiseHits` is kept as the test baseline.*
+
 A hit strikes the glass floor as a branching bolt where it landed. IDs: 10 = Lightning Storm. The plan asked for the bolt's
 shape and return-stroke timing to be prototyped alone, in a still sequence, before the rest; that is what the first captures were
 (bolt, floor and nothing else), and the ring, splash and discharges were added after the shape was accepted.
@@ -1594,6 +1604,8 @@ lights 22 ms later, when the leader arrives.
 - The look browser thumbnails are 12.6 s of the demo; another moment may suit a look better.
 
 ## Milestone 10: Ripple Pond (scene 12 in the table, ID 11)
+
+*Its hits no longer come from `modulation::RiseHits` (described below); see Milestone 11. `RiseHits` is kept as the test baseline.*
 
 A dark glossy pool that keeps a record of the last few seconds of hits. IDs: 11 = Ripple Pond. **The monitor was off while the
 scene was built**, so the first look at it was on the software renderer and on a new windowless harness on the RX 580; once the display
@@ -1751,3 +1763,180 @@ Fireworks' hit counts are 80, 82, 40, 39, 38, 12, 1, 0: a hit makes a crater and
 - Not done / not verified: a new stream plays on the real output until it is moved, 49 ms in the test; not listened for, and a
   stream that starts loudly at its first sample could be heard for that moment. Streams you had sent to another device are moved
   too, as before. The level was read from the sinks and a recorded tone, not heard on this machine.
+
+## Milestone 11: Drum detection (2026-10-14)
+
+The request: several scenes (Sparks, Fireworks, Lightning Storm, Ripple Pond) are best synchronized with drums rather than with
+levels at frequencies. Can the signal be processed to reliably detect drums? First measure how well, then make those scenes
+fire on drum hits.
+
+**Short answer.** Yes, well enough to drive visuals; not "reliably" in the sense of never being wrong. On labelled test music
+the new detector finds about three quarters of the kicks, snares and hats that a listener would call hits and 97% of cymbals,
+96% of what it reports is a real hit, and it reports about 20 ms after the drum. The old detector found 31%. It misses claps in
+some electronic kits, most toms, the click-less sub-bass kicks of electronic music and the fast double-bass of metal, finds fewer
+drums under a loud voice, and fires a few times a minute on music with no drums. Detection on **real recorded drums** has not been
+measured, because there was no real recording with known drum times; what was measured on real audio is how often it fires where
+there are no drums. Everything below says how, and what that leaves open.
+
+**The old detector, measured first.** `modulation::RiseHits` (per-bin spectral rise, normalized, peak-picked) was scored on a new
+labelled corpus (below). It is a note-attack detector: at Sensitivity 1 it finds 31% of the hits asked for with 97% precision,
+and fires 107 times a minute on songs with no drums (piano, pizzicato and marimba attacks). Raising Sensitivity trades one for the
+other (under the first, flawed scoring: recall 41% to 60%, false hits 147 to 275 a minute), so no setting does both. The plan's
+Milestone 3b had already recorded that a hand-thresholded kick/snare/hat classifier on the three onset regions failed.
+
+**What was built**
+
+- `src/drums.rs`: the detector, run by `analyzer::Dsp` on every 10 ms hop of the 1024-point spectrum the onset analysis already
+  computes. `Frontend`: sixteen bands (single bins in the lows, a third of an octave above 1 kHz), each described by its log level
+  against a slow average over the last four frames, plus the frequency-median of the per-bin rise (a drum lifts a stretch of the
+  spectrum at once, a note only its harmonics) and the share of bins that rose, for this frame and the last (137 features), and a
+  loudness follower that scales the spectrum so the music sits at the same level whatever the volume. `Model`: one hidden layer of
+  48 tanh units into three sigmoid outputs, **low** (kick, tom), **snare** (snare, clap, rim) and **high** (hat, cymbal), independent
+  so that a kick and a hat landing together are both reported. **Five such networks, trained independently, are averaged**
+  (`DrumDetector::models`). `Picker`: a hit is reported when an output crosses 0.7, one frame later (to see whether it climbs),
+  with a refractory time per output (60, 70 and 45 ms), a strength (its flux against the hardest recent hit of its kind) and a
+  place on the emitter line (the flux-weighted centroid inside the kind's stretch of it, so a tom sits right of a kick). Hits carry
+  their timestamp from the analyzer thread and reach the UI through `Shared.drums` / `Audio::take_drums`.
+- `src/drum_model.bin`: the five networks and the picker's thresholds (141 KB, little-endian f32, read by `drums::builtin`
+  through `include_bytes!`; `drum_train.rs` writes it). 50 microseconds a hop on one core for the whole detector, five networks included (measured; the frontend, not the networks, is most of it).
+- `modulation::DrumHits`: what the scenes see. It reads each hit once, drops hits the detector is not at least
+  `needed_p(Sensitivity)` sure of (0.9 at Sensitivity 1, 0.14 lower per doubling, never below 0.7), maps strength to 0.2-1, and thins
+  dense passages (the first four hits' worth in the last second are free, a hat counts 0.75, each further unit raises the strength the
+  next needs by 0.1; eighth-note hats alone are never thinned). **Sensitivity** therefore now means "how sure the detector must be"
+  in these four scenes (the Fountain still reads it as its rise threshold; the tooltip says both). Fireworks, Lightning and Ripple
+  swapped `RiseHits` for `DrumHits` and nothing else.
+- Sparks: `PeakHits` (cap jumps of five LED segments) is gone. Each kick, snare and tom throws a burst from the column at its place
+  on the frequency axis (`modulation::column_pushes`), sized by strength^1.5; hats and cymbals only when accented (strength 0.85 or
+  more), because hats are most of all hits and made the treble columns shower constantly (and cost 1.4 ms).
+- Test tooling (all `#[cfg(test)]`): `corpus.rs`, a renderer of labelled songs from the system's General MIDI soundfont
+  (`TimGM6mb.sf2`: eight real drum kits and 128 instruments; three computed kits are available but not used for the shipped model,
+  below), with a sequencer (eleven grooves, bass/chord/lead styles, swing, fills, hat rolls, humanized timing and velocities), a
+  mastering chain (reverb, bus compression, soft clip) and augmentations (broadband noise beds with per-block band flicker,
+  distortion, speech phrases, optional digital-silence gaps, a random level per song). `drum_eval.rs` scores a detector, draws
+  spectrograms and onset images with the detections on them, and analyzes recorded captures. `drum_train.rs` renders 220 random
+  songs (10,560 s), extracts the features exactly as the app does, trains the five networks in parallel (Adam, weighted cross-entropy,
+  40 epochs, about 12 minutes) and writes the model.
+- Debug: `GEQ_LATENCY=1` prints each drum hit as the UI takes it. The README has a "Drum detection" section with the commands.
+
+**Measured** (the corpus: 18 songs of 44 s, 13 with drums and 5 without, plus the repo's two synthetic songs with exact drum times;
+none of them in the training set; scored on hits asked for = velocity 64 or more and not part of a roll; the scenes' default confidence,
+0.9. A detection matches a label if reported from 20 ms before to 100 ms after the drum's sample starts.)
+
+| | recall | precision | F1 | false hits a minute, drum-free songs |
+|---|---|---|---|---|
+| old `RiseHits`, Sensitivity 1 | 31.1% | 96.6% | 0.47 | 107 |
+| **new, confidence 0.9 (the scenes' default)** | **76.6%** | 95.9% | **0.85** | **37** |
+| new, confidence 0.8 (Sensitivity about 2) | 85.9% | 90.9% | 0.88 | 68 |
+
+With the output that fired also having to be the right one (a snare lighting the kick output counts as a false hit, as the scenes
+would show it): recall 73%, precision 94%. By drum, new at 0.9 (old in brackets): kicks 78% (38%), snares 75% (40%), hats 76% (22%),
+cymbals 97% (37%), toms 50% (14%). Precision by output: low 97%, snare 96%, high 92%. Latency from the drum's sample start to the
+report: median 21 ms, 10th to 90th percentile 16-26 ms; the scene sees it in the same frame it is taken, so about 35 ms in all,
+as with the old detector (33 ms). Per song (class-aware F1): jazz 0.99, rock 0.97, funk 0.96, break 0.95, ballad 0.94, noisy rock 0.93, pop 0.91, trap 0.85, metal
+0.85, solo 0.83, pop with speech phrases laid over it 0.76, house 0.68 (claps and open hats in an electronic kit), a song whose kick is a
+click-less synthetic sub-bass 0.37. False hits on drum-free songs: soft piano/strings/sax 4 a minute, speech 16, a wall of distorted guitar with noise 15,
+and the two deliberately adversarial ones (plucked strings and marimba/xylophone at sixteenth-note density) 45 and 102.
+
+**Generalization.** The same recipe trained with two whole drum kits held out (Power and Brush) scores the songs played on them as
+well as the others: metal (Power) 0.81, breakbeat (Power) 0.93, ballad (Brush) 0.99, against 0.83 to 0.97 for songs on kits it trained
+on, and 0.84 overall against 0.86. So it learned the shape of drums, not particular samples. (Both use the same soundfont, so this
+says nothing yet about real kits.)
+
+**Real recordings** (the default output's monitor, 75 s each, read-only, kept only in a temporary folder and deleted): a course video
+(speech, no music) and a rock track from Spotify. There are no drum labels for either, so only false triggers were measurable, and
+only where I could see there was nothing drum-like: speech 14 hits a minute (the old detector 152); two stretches of the rock track
+in which the onset image shows no drum bars (a soft, dense mix; I could not check by ear) 22 a minute at the default confidence, 8 at
+0.95 (old 33). Real speech laid over three of the drum songs at equal level (held out of training; confidence 0.9): rock 0.97 to 0.92,
+pop 0.91 to 0.69, house 0.68 to 0.43; the old detector found 41%, 30% and 15% of those mixes' drums. On the repo's own synthetic
+fixtures (made by other code, never trained on): tones and silence give no hits, the impulse fixture gives one hit per click, the
+demo and dense songs give about 4-5 hits a second to a scene, 94 of 130 and 77 of 108 of their drums are heard, but as the high output
+(their kicks, computed sine sweeps, are not recognized as kicks: class-aware kick recall 6/94), and the percussion fixture's kicks (a
+pure sine from digital silence) are not found at all.
+
+CPU: 50 microseconds per 10 ms hop for the whole detector (five networks) in the analyzer thread, 0.5% of a core. GPU and frame pacing at 5120x1440, dense fixture, real time
+(`GEQ_FPS=1 GEQ_GPUTIME=1`; measured with an earlier model of the same architecture, a training job running on other cores; the scenes'
+code and the shape of the hit stream have not changed since): 120.0 fps in every scene below, p99 8.6-9.3 ms; scene GPU time Fireworks
+0.20 ms, Lightning 0.35, Ripple 0.89 + 0.26 for its solver, 3D columns 2.0 ms with Sparks off and 2.7-3.0 with them on (2.2 with the old
+rule: every kick and snare now throws a burst). Captures of the three scenes repeated byte for byte and showed the new behaviour (a
+willow for a kick on the left, bolts with floor pools and splashes, crossing rings with a droplet splash). Tests: 113 pass (12 new:
+the adapter, the column mapping, the picker, silence and a chord, a rock song's kicks and snares found on time, a drum-free song,
+a recording 28 dB down, chunk independence of the hits and the corpus; the 3 for the removed `PeakHits` are gone).
+
+**How the model was chosen, and what went wrong on the way** (the table is the false hits a minute at confidence 0.9 on the two real
+captures, Spotify / speech; no labelled recording of real drums existed, so this was the only real-audio signal)
+
+| configuration | Spotify | speech |
+|---|---|---|
+| first trained on clean synthetic mixes (at the picker's own 0.7 floor, there was no 0.9 yet) | 235 | 120 |
+| + noise beds, distortion, speech (single network) | 27 | 13 |
+| + computed kits throughout | 112 | 57 |
+| + computed kicks/toms only, random levels, digital-silence gaps | 72 | 28 |
+| soundfont kits, random levels, gaps | 57 | 26 |
+| soundfont kits, random levels | 47 | 39 |
+| soundfont kits, gaps | 29 | 11 |
+| soundfont kits, neither (symmetric loudness follower) | 34 | 47 |
+| soundfont kits, one-sided loudness clamp, neither | 34 | 7 |
+| **ensemble of five of the "random levels" configuration (shipped)** | **22** | **14** |
+| same ensemble with computed kicks/toms | 41 | 19 |
+
+- A detector tuned on clean synthetic audio does not survive real recordings. The first trained model scored well on the corpus and
+  fired 235 times a minute on the real rock track, because a real recording's high bands are never silent: about 15% of their bins
+  "rise" in a typical frame (noise, reverb, codec flicker), against 0% in the corpus, and the model had never seen a noise floor above
+  its compression knee. Rendering the training songs with noise beds at -65 to -35 dBFS (band levels flickering every ~21 ms like a
+  lossy codec's), distorted guitars and speech took it to 27 a minute. The check that found it was real audio and an *onset image*
+  (rising energy per frequency, 30 Hz-16 kHz): a drum is a vertical bar across many rows, speckle is not.
+- Real-capture rates vary a lot with training details (29 to 57 a minute on the same capture between configurations that differ only in
+  levels and gaps), so single-capture comparisons are noisy and I stopped chasing the luckiest. An average of independently trained
+  networks gave 22 and 14 a minute and held the corpus scores, and is what ships.
+- My first scoring was wrong in my favour. It skipped any label within 90 ms of the previous label of *any* kind, so a kick landing with
+  a hat was never asked for, and recall read about 97%. Counting only rolls (same class within 90 ms) gave the figures above. It
+  inflated the old detector too. Worth checking whenever hits coincide.
+- Volume matters, and level randomization had to stay. The loudness follower first only lifted quiet audio and never lowered loud audio,
+  which left a recording 28 dB down about 8 dB lower than anything in training and cut recall to 58%. Making it symmetric was not
+  enough on its own (69-73% recall at -28 dB); a random level for every training song (full scale to -30 dB) fixed it (80-90%), and a
+  unit test keeps it fixed.
+- Computed drums as training material hurt on real audio. Kits made of sine-sweep kicks and filtered-noise hats and snares roughly
+  doubled the false hits on real recordings (noise bursts look like the speckle of real high bands), and computed kicks alone taught
+  the model to hear bass notes as kicks (25 false lows on the rock track against 1). Without them it cannot hear click-less sub-bass
+  kicks: 3 of 76 in a synthetic sub-kick song, and the synthetic demo's kicks. I judged real music the target and shipped without.
+  The `GEQ_SYNTH_KITS=kick` option of the trainer makes the other trade.
+- A kick that arrives from exact digital silence is out of distribution: the whole jump lands in one frame (flux 5.3 against about 2-3 in
+  training). Training with stretches of digital silence did not fix it (`GEQ_GAPS=1` keeps the option); the `percussion` fixture's kicks
+  stay unheard. A real recording rarely has exact zeros before a kick, but a track that stops dead and restarts can.
+- Raising the confidence from 0.8 to 0.9 costs few kicks, snares or cymbals (kicks 84% to 78%, cymbals 99% to 97%), more hats and toms,
+  and halves the false hits on drum-free songs (68 to 37 a minute here, 65 to 22 on the real track). That is why 0.9 is the default and
+  Sensitivity can go down to 0.7.
+- Hits need budgeting more than detecting: hats are most detections. Sparks leave plain hats out and `DrumHits` thins dense passages.
+
+**Differences from the plan**
+
+- F2b said the onset envelopes are "frequency-region events, not instrument detection". They still are; a separate drum model now exists beside them.
+- Milestone 8-10 hits came from "the Fountain's normalized rise"; they now come from this detector. `RiseHits` stays in the tree under `#[cfg(test)]` as the
+  baseline the table above is measured against. `PeakHits` is deleted.
+- The detector classifies (low, snare, high) where the plan's shared hit had only a position. The place on the line is the kind's own stretch of it.
+
+**Not done / not verified**
+
+- Real drums. The networks were trained and scored on a soundfont's drums, so real kits, real mixes and sung vocals (only speech was tried)
+  are the open question; the owner's own watching is the real test, with Sensitivity as the control and `GEQ_LATENCY=1` printing what it hears.
+  The 0.9 design point, the Sparks hat rule and the choice of ensemble were made using the corpus and the two real captures, so the table is
+  not a clean held-out estimate; the weights never saw the scored songs or the real captures.
+- The final model was not run in the live app: the display went to sleep during the work and captures hang with it off. The scenes were
+  captured and timed live with an earlier model of the same architecture, and the final one was run through the app's own data path without
+  a window (`app_path_hits`). Run `GEQ_SYNTH=1 GEQ_SCENE=9 GEQ_FPS=1 GEQ_GPUTIME=1 GEQ_FULLSCREEN=1` once with the display on.
+- Weak spots: toms (50%), claps in electronic kits (house 0.68), the sixteenth-note double-bass of metal (60% of kicks), sub-bass kicks, and drums
+  under a loud voice (above). The `GEQ_SYNTH` demo's kicks are heard as hats, so its scenes are hat-driven on the right.
+- The Fountain still reads the spectral rise; it was not asked about.
+- The look thumbnails of scenes 9-11 were not regenerated (the display was asleep): they show each look at moments picked for the old detector.
+  `tools/make-thumbs.sh` will redo them.
+- Real-drum labels (added afterwards): `tools/labeler.html` (a single offline page: onset image, half-speed playback, one pass per drum
+  type, taps corrected for the measured latency and snapped to the sharpest onset of the kind's band, detector marks for review, excerpt
+  and no-drums stretches, dev/test split, autosave), `tools/capture-song.sh`, and the `propose_labels` and `eval_real` tests; the
+  workflow is in `labels/README.md`. Tested on rendered songs with exact drum times: simulated taps (the true time plus or minus 40 ms)
+  snap to within 10 ms of the truth for 100% of snares, 100% of hats on the rock song (82-88% on a house song that is 78% ghost hats
+  with open and closed hats on the same step) and 92-93% of kicks (the rest snap onto a bass-note attack just before the kick, which
+  review catches); real keyboard presses at the media clock with a 150 ms reaction landed within 2.5 ms of eight kicks; the latency
+  measurement recovered a simulated 180 ms as 181; `eval_real` on simulated labels (3% of hits missed) gave class-aware F1 0.95 and
+  0.68 for the rock and house songs, the same as scoring against the exact times. Not tested: a person tapping, other browsers than
+  the one in this environment, and the file pickers (the page also opens `?audio=`, `?proposals=` and `?labels=` addresses).
+- Nothing was committed.

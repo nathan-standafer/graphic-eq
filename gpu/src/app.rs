@@ -2,7 +2,8 @@ use crate::analyzer::{Levels, CURVE_POINTS, FLOOR_DB};
 use crate::audio::Audio;
 use crate::bands;
 use crate::clock;
-use crate::modulation::{Modulation, PeakHits, RiseNorm, Signals};
+use crate::drums::DrumHit;
+use crate::modulation::{column_pushes, spark_worthy, DrumHits, Modulation, RiseNorm, Signals};
 use crate::presets::{self, Idle, Look};
 use crate::render::{Draw, Gpu, PostLook, SceneCallback, BLOOM_LEVELS, HIST_W, RISE_FULL};
 use crate::routing;
@@ -23,7 +24,7 @@ const PEAK_FALL_DB_PER_S: f32 = 22.0;
 const HISTORY_RATE: f32 = 60.0;
 const THEMES: [&str; 5] = ["Classic green/red", "Amber", "Ice", "Neon", "Rainbow"];
 const FADE_S: f64 = 0.9;
-const LAST_SCENE: usize = scenes::ALL.len() - 1;
+const LAST_SCENE: usize = scenes::ID_SLOTS - 1;
 const OVERLAY_VISIBLE_S: f32 = 2.8;
 
 /// A scene with its look resolved: preset defaults plus the user's live changes.
@@ -119,13 +120,11 @@ pub struct App {
     /// The 192-point spectrum as displayed (0..1), for the ferrofluid orb's spikes.
     spectrum_f: [f32; CURVE_POINTS],
     peaks_f: [f32; 11],
-    /// Peak-cap pushes (see `modulation::PeakHits`) and the bursts due this frame.
-    peak_tracker: PeakHits,
+    /// The drum hits found since the last frame, the Sparks overlay's own view of them (`modulation::DrumHits`) and
+    /// the bursts it throws this frame, per column.
+    drums: Vec<DrumHit>,
+    spark_hits: DrumHits,
     peak_hits: [f32; 11],
-    /// Where the EQ sliders stand across the window (points), measured by the strip each frame; None when it is hidden.
-    strip_x: Option<[f32; 11]>,
-    /// The smoke nozzles' places across the scene (fractions of its width): over the sliders when they show.
-    nozzle_x: [f32; 11],
     now: f64,
     last_wall: f64,
     stepped: Option<f32>,
@@ -135,7 +134,7 @@ pub struct App {
     dirty_since: Option<Instant>,
     shot: Option<(String, f64)>, // GEQ_SHOT=path[,seconds]: save a screenshot of this window and exit
     shot_sent: bool,
-    cams: [CamState; scenes::ALL.len()],
+    cams: [CamState; scenes::ID_SLOTS],
     idle: IdleCam,
     fullscreen: bool,
     /// GEQ_BARE=1: scene only, no panels or overlay (captures at an exact aspect without going full screen).
@@ -144,7 +143,7 @@ pub struct App {
     last_activity: f64,
     trans: Option<Transition>,
     next_cycle: f64,
-    built: [bool; scenes::ALL.len()],
+    built: [bool; scenes::ID_SLOTS],
     diag: Diag,
     thumbs: Thumbs,
     browser_open: bool,
@@ -210,6 +209,7 @@ impl App {
         if let Ok(v) = std::env::var("GEQ_SCENE") {
             cfg.scene = v.parse().unwrap_or(0);
         }
+        cfg.scene = scenes::info(cfg.scene).id;
         if let Ok(v) = std::env::var("GEQ_PRESET") {
             cfg.look[(cfg.scene as usize).min(LAST_SCENE)] = v.parse().unwrap_or(0);
         }
@@ -225,9 +225,6 @@ impl App {
         }
         if let Ok(v) = std::env::var("GEQ_DENSITY") {
             cfg.density = v.parse().unwrap_or(cfg.density);
-        }
-        if let Ok(v) = std::env::var("GEQ_GRAINS") {
-            cfg.sand_grains = v.parse().unwrap_or(cfg.sand_grains);
         }
         if let Ok(v) = std::env::var("GEQ_SPIKES") {
             cfg.orb_spikes = v.parse().unwrap_or(cfg.orb_spikes);
@@ -245,7 +242,7 @@ impl App {
             cfg.auto_cycle = true;
             cfg.cycle_secs = secs;
         }
-        let mut cams = [CamState::default(); scenes::ALL.len()];
+        let mut cams = [CamState::default(); scenes::ID_SLOTS];
         if let Ok(v) = std::env::var("GEQ_ORBIT") {
             let mut p = v.split(',').filter_map(|s| s.parse::<f32>().ok());
             let s = (cfg.scene as usize).min(LAST_SCENE);
@@ -255,7 +252,6 @@ impl App {
             let mut p = v.split(',').filter_map(|s| s.parse::<f32>().ok());
             cams[(cfg.scene as usize).min(LAST_SCENE)].pan = [p.next().unwrap_or(0.0), p.next().unwrap_or(0.0)];
         }
-        cfg.scene = cfg.scene.min(LAST_SCENE as u32);
 
         let mut app = App {
             cfg,
@@ -274,10 +270,9 @@ impl App {
             levels_f: [0.0; 11],
             spectrum_f: [0.0; CURVE_POINTS],
             peaks_f: [0.0; 11],
-            peak_tracker: PeakHits::new(),
+            drums: Vec::new(),
+            spark_hits: DrumHits::new(),
             peak_hits: [0.0; 11],
-            strip_x: None,
-            nozzle_x: std::array::from_fn(|i| (i as f32 + 0.5) / 11.0),
             now: 0.0,
             last_wall: clock::now(),
             stepped,
@@ -295,7 +290,7 @@ impl App {
             last_activity: 0.0,
             trans: None,
             next_cycle: 0.0,
-            built: [false; scenes::ALL.len()],
+            built: [false; scenes::ID_SLOTS],
             thumbs: Thumbs::default(),
             browser_open: std::env::var_os("GEQ_BROWSER").is_some(),
             diag: Diag {
@@ -368,8 +363,6 @@ impl App {
             self.levels_f[i] = self.frac(self.disp[i]);
             self.peaks_f[i] = if self.cfg.peak_caps { self.frac(self.peak[i]) } else { 0.0 };
         }
-        let caps: [f32; 11] = std::array::from_fn(|i| self.frac(self.peak[i]));
-        self.peak_hits = self.peak_tracker.update(&caps, self.now, dt);
     }
 
     // ------------------------------------------------------------------ looks and scenes
@@ -494,14 +487,12 @@ impl App {
             rings: sig.rings,
             cam,
             row_frac: (self.hist_acc * HISTORY_RATE).clamp(0.0, 1.0),
-            persist: self.cfg.persistence,
             sparks: self.cfg.sparks,
             density: self.cfg.density,
             gradient: self.cfg.spark_sensitivity,
             peak_hits: self.peak_hits,
-            smoke: self.cfg.smoke_density,
-            nozzle_x: self.nozzle_x,
-            grains: self.cfg.sand_grains,
+            drums: std::array::from_fn(|i| self.drums.get(i).copied().unwrap_or_default()),
+            n_drums: self.drums.len().min(scenes::MAX_DRUMS),
             spikes: self.cfg.orb_spikes,
             curtains: self.cfg.aurora_curtains,
             ripple_life: self.cfg.ripple_life,
@@ -661,13 +652,18 @@ impl eframe::App for App {
         self.audio.advance(self.now);
         let lv: Levels = self.audio.levels().unwrap_or_default();
         let events = self.audio.take_events();
-        let wave = self.audio.take_wave();
+        self.drums = self.audio.take_drums();
         if self.diag.latency {
+            for d in &self.drums {
+                eprintln!("drum {:?} p {:.2} strength {:.2} pos {:.2} at {:.3}s, delivered {:.1} ms later", d.kind, d.p, d.strength, d.pos, d.t, (self.now - d.t) * 1000.0);
+            }
             for e in &events {
                 eprintln!("onset band {} strength {:.2} at {:.3}s, delivered {:.1} ms later", e.band, e.strength, e.t, (self.now - e.t) * 1000.0);
             }
         }
         self.step_levels(&lv, dt);
+        let sparks = self.spark_hits.update(&spark_worthy(&self.drums), self.cfg.spark_sensitivity.clamp(0.2, 5.0), self.now, self.sig.gate > 0.5);
+        self.peak_hits = column_pushes(&sparks);
         self.sig = self.modn.update(self.now, dt, &lv, &events, &self.levels_f);
         self.idle.update(self.now, dt, self.sig.gate);
         ctx.request_repaint();
@@ -783,11 +779,6 @@ impl eframe::App for App {
             }
             let ppp = ctx.pixels_per_point();
             let size_px = [(rect.width() * ppp) as u32, (rect.height() * ppp) as u32];
-            // the smoke nozzles stand over the sliders in windowed mode, and evenly spaced when those are hidden
-            self.nozzle_x = match self.strip_x.filter(|_| !self.fullscreen && !self.bare && rect.width() > 1.0) {
-                Some(c) => std::array::from_fn(|i| ((c[i] - rect.left()) / rect.width()).clamp(0.0, 1.0)),
-                None => std::array::from_fn(|i| (i as f32 + 0.5) / 11.0),
-            };
             if size_px != self.diag.last_size {
                 self.diag.last_size = size_px;
                 self.diag.resize_cooldown = 12;
@@ -825,7 +816,7 @@ impl eframe::App for App {
             }
             draws.push(Draw { scene: to.scene, p: self.params_for(&to, &self.cams[s], &self.sig) });
             let freeze = self.trans.as_ref().map_or(false, |t| t.frozen && self.frames > t.start_frame);
-            let cb = SceneCallback { draws, mix, freeze_outgoing: freeze, post, time: self.now as f32, size_px, rows, wave };
+            let cb = SceneCallback { draws, mix, freeze_outgoing: freeze, post, time: self.now as f32, size_px, rows };
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, cb));
         });
 
@@ -928,10 +919,8 @@ impl App {
                 theme_color(self.cfg.theme, t)
             };
             let _ = look;
-            let mut centres = [0.0f32; bands::COUNT];
             ui.columns(bands::COUNT, |cols| {
                 for (i, col) in cols.iter_mut().enumerate() {
-                    centres[i] = col.max_rect().center().x;
                     col.vertical_centered(|ui| {
                         let mut g = self.cfg.gains[i];
                         let lit = self.levels_f[i];
@@ -988,7 +977,6 @@ impl App {
                     });
                 }
             });
-            self.strip_x = Some(centres);
             if changed {
                 self.cfg.preset = CUSTOM.into();
                 self.push_gains();
@@ -1266,13 +1254,13 @@ impl App {
                         ui.checkbox(&mut self.cfg.peak_caps, "Peak hold").changed().then(|| touched = true);
                     }
                     Control::Sparks => {
-                        ui.checkbox(&mut self.cfg.sparks, "Sparks").on_hover_text("Embers off the lit columns, and sparks when a peak cap jumps 5 or more segments (the bigger the jump, the bigger the burst)").changed().then(|| touched = true);
+                        ui.checkbox(&mut self.cfg.sparks, "Sparks").on_hover_text("Embers off the lit columns, and a burst of sparks from the column at its place on the frequency axis when a drum hits (kicks from the bass columns, hats from the treble ones; the harder the hit, the bigger the burst)").changed().then(|| touched = true);
                     }
                     Control::Gradient => {
-                        ui.label(RichText::new("SPARKS").small().weak());
+                        ui.label(RichText::new(if self.cfg.scene == scenes::RIPPLE { "RIPPLES" } else { "SPARKS" }).small().weak());
                         touched |= ui
                             .add(egui::Slider::new(&mut self.cfg.spark_sensitivity, 0.4..=3.0).logarithmic(true).text("sensitivity"))
-                            .on_hover_text("How steeply the volume at a frequency must rise to throw sparks (or, in the fireworks, to set off a shell, in the storm to strike, in the pond to splash). Higher = more.")
+                            .on_hover_text("The fountain: how steeply the volume at a frequency must rise to throw sparks. Column sparks, fireworks, storm and pond: how sure the drum detector must be that it heard a drum (a kick, snare, tom, hat or cymbal) before it sets off a burst, a strike or a splash. Higher accepts less certain hits, lower only the clearest. The pond starts more sensitive for frequent ripples.")
                             .changed();
                     }
                     Control::Density => {
@@ -1280,20 +1268,6 @@ impl App {
                         touched |= ui
                             .add(egui::Slider::new(&mut self.cfg.density, 0.25..=1.5).text("density"))
                             .on_hover_text("How many particles the fountain launches, stars in each firework, branches and sparks in each lightning strike, or droplets in each splash of the pond")
-                            .changed();
-                    }
-                    Control::SmokeThickness => {
-                        ui.label(RichText::new("SMOKE").small().weak());
-                        touched |= ui
-                            .add(egui::Slider::new(&mut self.cfg.smoke_density, 0.3..=2.0).text("thickness"))
-                            .on_hover_text("How much smoke each jet blows. Lower gives delicate wisps, higher dense plumes.")
-                            .changed();
-                    }
-                    Control::SandGrains => {
-                        ui.label(RichText::new("SAND").small().weak());
-                        touched |= ui
-                            .add(egui::Slider::new(&mut self.cfg.sand_grains, 0.25..=1.5).text("grains"))
-                            .on_hover_text("How much sand lies on the plates. Less gives thin, delicate lines; more gives bold ones.")
                             .changed();
                     }
                     Control::OrbSpikes => {
@@ -1317,13 +1291,6 @@ impl App {
                             .on_hover_text("How long a ripple lives. Short gives a quick, clean pond; long a surface crowded with the last several seconds of hits.")
                             .changed();
                     }
-                    Control::ScopePersistence => {
-                        ui.label(RichText::new("PERSISTENCE").small().weak());
-                        touched |= ui
-                            .add(egui::Slider::new(&mut self.cfg.persistence, 0.05..=1.0).logarithmic(true).suffix(" s"))
-                            .on_hover_text("How long the phosphor glows after the beam passes")
-                            .changed();
-                    }
                 }
                 ui.add_space(4.0);
             }
@@ -1334,11 +1301,7 @@ impl App {
             ui.add_space(4.0);
             egui::Grid::new("look_opts").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
                 ui.label("Motion");
-                let motion_tip = if self.cfg.scene == scenes::SMOKE {
-                    "Turbulence: how much the plumes wobble and roll up. 0 gives smooth, straight columns."
-                } else if self.cfg.scene == scenes::CHLADNI {
-                    "How hard a hit shakes the plates, and how far the lamp drifts over the sand. 0 gives a fixed lamp and sand that only follows the loudness."
-                } else if self.cfg.scene == scenes::AURORA {
+                let motion_tip = if self.cfg.scene == scenes::AURORA {
                     "How much the curtains fold and drift, how the lake stirs, and how far the camera wanders. 0 holds the folds still (the columns still follow the music)."
                 } else if self.cfg.scene == scenes::FIREWORKS {
                     "How far the stars drift on the wind and how far the camera wanders. 0 holds the sky still."
@@ -1349,12 +1312,12 @@ impl App {
                 } else if self.cfg.scene == scenes::FERROFLUID {
                     "How elastic the fluid is: spikes thrown out by a hit, wobbling lobes, breathing, and how fast the lights drift around it. 0 gives a fluid that only follows the loudness, in still light."
                 } else {
-                    "Camera drift, banking and wall breathing. 0 holds everything still."
+                    "Camera drift and movement. 0 holds everything still."
                 };
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.motion, 0.0..=1.5)).on_hover_text(motion_tip).changed();
                 ui.end_row();
                 ui.label("Flash");
-                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses (puffs from the smoke jets, the glow of sand on a hit, the lights and tip glow of the ferrofluid orb, the highlights that run up the aurora's rays, the flash of a firework and the light it throws on the floor, the strokes of a lightning bolt with the light and thunder ring it throws on the floor, the flares of the pond's light towers and the glow of its droplets; 0 leaves only a dim channel). 0 turns them off.").changed();
+                touched |= ui.add(egui::Slider::new(&mut self.cfg.flash, 0.0..=1.5)).on_hover_text("Brightness of onset rings, sparks and pulses (the lights and tip glow of the ferrofluid orb, the highlights that run up the aurora's rays, the flash of a firework and the light it throws on the floor, the strokes of a lightning bolt with the light and thunder ring it throws on the floor, the flares of the pond's light towers and the glow of its droplets; 0 leaves only a dim channel). 0 turns them off.").changed();
                 ui.end_row();
                 ui.label("Glow");
                 touched |= ui.add(egui::Slider::new(&mut self.cfg.bloom, 0.0..=2.0)).changed();

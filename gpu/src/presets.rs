@@ -2,7 +2,7 @@
 //! scene. They are separate from the EQ presets and never touch gains, bypass or routing.
 
 use crate::render::BLOOM_LEVELS;
-use crate::scenes::{AURORA, CHLADNI, COLUMNS, FERROFLUID, FIREWORKS, FOUNTAIN, LIGHTNING, RIPPLE, SMOKE, TUNNEL, VECTORSCOPE, WATERFALL};
+use crate::scenes::{AURORA, COLUMNS, FERROFLUID, FIREWORKS, FOUNTAIN, LIGHTNING, RIPPLE, WATERFALL};
 
 /// Idle camera path amplitudes at Motion = 1: yaw, pitch (radians), dolly (fraction), roll (radians).
 #[derive(Clone, Copy)]
@@ -32,14 +32,7 @@ pub struct Look {
 
 const COLUMN_IDLE: Idle = Idle { yaw: 0.10, pitch: 0.03, zoom: 0.05, roll: 0.0 };
 const TERRAIN_IDLE: Idle = Idle { yaw: 0.07, pitch: 0.02, zoom: 0.04, roll: 0.0 };
-const TUNNEL_IDLE: Idle = Idle { yaw: 0.06, pitch: 0.04, zoom: 0.05, roll: 0.07 };
-/// The scope is a flat instrument: nothing drifts.
-const SCOPE_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
 const FOUNTAIN_IDLE: Idle = Idle { yaw: 0.07, pitch: 0.02, zoom: 0.04, roll: 0.0 };
-/// The smoke is a flat picture with no camera.
-const SMOKE_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
-/// The plates are a flat picture too.
-const SAND_IDLE: Idle = Idle { yaw: 0.0, pitch: 0.0, zoom: 0.0, roll: 0.0 };
 /// The orb is round, so a slow turn about it only slides the reflections; the pitch and dolly stay small.
 const ORB_IDLE: Idle = Idle { yaw: 0.10, pitch: 0.025, zoom: 0.04, roll: 0.0 };
 
@@ -55,7 +48,7 @@ const LIGHTNING_IDLE: Idle = Idle { yaw: 0.04, pitch: 0.012, zoom: 0.03, roll: 0
 /// The pond is watched from a fixed spot above the water: the idle path sways the view a few degrees.
 const RIPPLE_IDLE: Idle = Idle { yaw: 0.04, pitch: 0.010, zoom: 0.03, roll: 0.0 };
 
-pub const LOOKS: [Look; 46] = [
+pub const LOOKS: [Look; 30] = [
     // ---- columns
     Look {
         scene: COLUMNS, name: "Studio", theme: 0, exposure: 1.0,
@@ -88,48 +81,6 @@ pub const LOOKS: [Look; 46] = [
         bloom: [0.36, 0.40, 0.30, 0.18, 0.10, 0.05], threshold: 0.85, knee: 0.5, vignette: 0.55,
         motion: 0.4, flash: 0.6, idle: TERRAIN_IDLE,
     },
-    // ---- tunnel
-    Look {
-        scene: TUNNEL, name: "Neon Conduit", theme: 3, exposure: 1.0,
-        bloom: [0.30, 0.38, 0.34, 0.26, 0.18, 0.12], threshold: 0.85, knee: 0.5, vignette: 0.5,
-        motion: 0.7, flash: 0.8, idle: TUNNEL_IDLE,
-    },
-    Look {
-        scene: TUNNEL, name: "Ice Core", theme: 2, exposure: 0.95,
-        bloom: [0.34, 0.36, 0.26, 0.18, 0.12, 0.08], threshold: 0.85, knee: 0.5, vignette: 0.55,
-        motion: 0.5, flash: 0.7, idle: TUNNEL_IDLE,
-    },
-    Look {
-        scene: TUNNEL, name: "Ember Flue", theme: 1, exposure: 1.0,
-        bloom: [0.28, 0.34, 0.36, 0.30, 0.22, 0.16], threshold: 0.8, knee: 0.5, vignette: 0.6,
-        motion: 0.6, flash: 0.8, idle: TUNNEL_IDLE,
-    },
-    Look {
-        scene: TUNNEL, name: "Prism", theme: 4, exposure: 0.9,
-        bloom: [0.30, 0.36, 0.30, 0.22, 0.14, 0.08], threshold: 0.9, knee: 0.5, vignette: 0.5,
-        motion: 0.7, flash: 0.7, idle: TUNNEL_IDLE,
-    },
-    // ---- vectorscope: a sharp core, a narrow halo and a faint broad glow, the way a phosphor tube blooms
-    Look {
-        scene: VECTORSCOPE, name: "P31 Green", theme: 0, exposure: 1.0,
-        bloom: [0.34, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.8, knee: 0.5, vignette: 0.6,
-        motion: 0.0, flash: 0.7, idle: SCOPE_IDLE,
-    },
-    Look {
-        scene: VECTORSCOPE, name: "Amber Scope", theme: 1, exposure: 1.0,
-        bloom: [0.30, 0.34, 0.30, 0.20, 0.12, 0.07], threshold: 0.8, knee: 0.5, vignette: 0.6,
-        motion: 0.0, flash: 0.7, idle: SCOPE_IDLE,
-    },
-    Look {
-        scene: VECTORSCOPE, name: "Ice Trace", theme: 2, exposure: 1.0,
-        bloom: [0.36, 0.34, 0.24, 0.14, 0.08, 0.04], threshold: 0.8, knee: 0.5, vignette: 0.6,
-        motion: 0.0, flash: 0.8, idle: SCOPE_IDLE,
-    },
-    Look {
-        scene: VECTORSCOPE, name: "Neon Lissajous", theme: 3, exposure: 0.95,
-        bloom: [0.34, 0.38, 0.30, 0.20, 0.12, 0.07], threshold: 0.85, knee: 0.5, vignette: 0.55,
-        motion: 0.0, flash: 0.8, idle: SCOPE_IDLE,
-    },
     // ---- fountain: bright small sprites want a tight halo and little broad glow, or the spray turns to fog
     Look {
         scene: FOUNTAIN, name: "Ice Geyser", theme: 2, exposure: 1.0,
@@ -150,50 +101,6 @@ pub const LOOKS: [Look; 46] = [
         scene: FOUNTAIN, name: "Spectrum Jets", theme: 4, exposure: 0.9,
         bloom: [0.30, 0.34, 0.26, 0.16, 0.09, 0.05], threshold: 0.9, knee: 0.5, vignette: 0.5,
         motion: 0.5, flash: 0.7, idle: FOUNTAIN_IDLE,
-    },
-    // ---- smoke jets: the smoke is soft, so the halo is wide and gentle and the highlights stay near the lamps
-    // (Motion is turbulence here: how much the plumes wobble and roll up)
-    Look {
-        scene: SMOKE, name: "Ice Vent", theme: 2, exposure: 1.0,
-        bloom: [0.26, 0.34, 0.32, 0.24, 0.15, 0.09], threshold: 0.85, knee: 0.5, vignette: 0.55,
-        motion: 0.6, flash: 0.8, idle: SMOKE_IDLE,
-    },
-    Look {
-        scene: SMOKE, name: "Ember Smoke", theme: 1, exposure: 1.0,
-        bloom: [0.24, 0.32, 0.34, 0.26, 0.17, 0.10], threshold: 0.8, knee: 0.5, vignette: 0.6,
-        motion: 0.6, flash: 0.8, idle: SMOKE_IDLE,
-    },
-    Look {
-        scene: SMOKE, name: "Neon Haze", theme: 3, exposure: 0.95,
-        bloom: [0.26, 0.34, 0.32, 0.24, 0.15, 0.09], threshold: 0.85, knee: 0.5, vignette: 0.55,
-        motion: 0.6, flash: 0.8, idle: SMOKE_IDLE,
-    },
-    Look {
-        scene: SMOKE, name: "Prism Plumes", theme: 4, exposure: 0.9,
-        bloom: [0.24, 0.32, 0.30, 0.22, 0.14, 0.08], threshold: 0.9, knee: 0.5, vignette: 0.5,
-        motion: 0.6, flash: 0.7, idle: SMOKE_IDLE,
-    },
-    // ---- chladni sand: fine nodal lines have to survive, so the halo is tight and the broad glow nearly absent
-    // (Motion is how hard a hit shakes the plates and how far the lamp drifts)
-    Look {
-        scene: CHLADNI, name: "Moonlit Sand", theme: 2, exposure: 1.0,
-        bloom: [0.26, 0.28, 0.18, 0.09, 0.05, 0.03], threshold: 1.0, knee: 0.5, vignette: 0.55,
-        motion: 0.6, flash: 0.8, idle: SAND_IDLE,
-    },
-    Look {
-        scene: CHLADNI, name: "Amber Dust", theme: 1, exposure: 1.0,
-        bloom: [0.26, 0.28, 0.20, 0.10, 0.06, 0.03], threshold: 0.95, knee: 0.5, vignette: 0.6,
-        motion: 0.6, flash: 0.8, idle: SAND_IDLE,
-    },
-    Look {
-        scene: CHLADNI, name: "Neon Grit", theme: 3, exposure: 0.95,
-        bloom: [0.26, 0.30, 0.20, 0.10, 0.06, 0.03], threshold: 1.0, knee: 0.5, vignette: 0.55,
-        motion: 0.6, flash: 0.8, idle: SAND_IDLE,
-    },
-    Look {
-        scene: CHLADNI, name: "Prism Sand", theme: 4, exposure: 0.9,
-        bloom: [0.24, 0.28, 0.18, 0.09, 0.05, 0.03], threshold: 1.0, knee: 0.5, vignette: 0.5,
-        motion: 0.6, flash: 0.7, idle: SAND_IDLE,
     },
     // ---- ferrofluid orb: a black mirror, so the halo is tight and the broad glow faint; only the brightest cores of
     // the strip lights and the tips of the tallest spikes may bloom (Motion is how elastic the fluid is, Flash the

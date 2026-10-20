@@ -3,7 +3,7 @@
 // it. A bolt is drawn from the table the CPU keeps (`lightning.rs`): a main channel of 64 segments and up to six
 // branches of 16, each generated here by midpoint displacement from the strike's seed, so the same seed draws the
 // same bolt in every capture. Segments are capsules with a Gaussian profile, integrated in closed form along their
-// length (the vectorscope's beam), so thin lines are anti-aliased analytically and need no MSAA.
+// length, so thin lines are anti-aliased analytically and need no MSAA.
 const FLOOR_EXTENT: f32 = 600.0;
 const MAX_BOLTS: u32 = 8u;
 const MAIN_LEVELS: u32 = 6u;

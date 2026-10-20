@@ -1,16 +1,15 @@
 use super::*;
 use super::fireworks::{lerp, Rng};
-use super::smoke::{run_pass, Stamper};
-use crate::modulation::{Hit, RiseHits};
+use crate::modulation::{DrumHits, Hit};
 use std::collections::VecDeque;
 
-/// A glossy dark pool that keeps a record of the last few seconds of hits. Each hit found by the same detector as
-/// the Fireworks and the storm (`modulation::RiseHits`) breaks the water where it landed on the line (bass at the
+/// A glossy dark pool that keeps a record of the last few seconds of hits. Each hit found by the same drum detector as
+/// the Fireworks and the storm (`drums.rs`, through `modulation::DrumHits`) breaks the water where it landed on the line (bass at the
 /// left) at once, and throws a few droplets in arcs; every droplet that lands drops an impulse into the water. The
 /// surface is the damped wave equation on a grid of cells 1/20 of a unit wide (a fragment pass per fixed step, like
-/// the smoke's solver), with a sponge around its edge so rings leave rather than bounce back. A heavy low hit makes
+/// a fluid solver), with a sponge around its edge so rings leave rather than bounce back. A heavy low hit makes
 /// a wide ring and the light, quick drops of the highs small ones. The water is shaded from the slope of the
-/// surface: it mirrors a horizon haze and four light towers whose brightness follows the bands, so a ring that
+/// surface: it mirrors a horizon haze and eleven light poles whose lit heights follow the EQ bands, so a ring that
 /// passes sweeps their reflections across the pool. The droplets are closed-form arcs the CPU can evaluate at any
 /// moment (`Pond`), so the particle system is not needed and the landings are known to the frame.
 pub struct Ripple {
@@ -32,7 +31,7 @@ pub struct Ripple {
     /// Which of the two state textures holds the current field.
     cur: usize,
     pond: Pond,
-    hits: RiseHits,
+    hits: DrumHits,
     /// Impulses made but not yet in the water (a frame that ran no step keeps them for the next).
     pending: VecDeque<Impulse>,
     acc: f32,
@@ -92,7 +91,7 @@ const WAVE_SPEED: f32 = 7.0;
 const DAMPING: f32 = 0.7;
 const SPONGE: f32 = 14.0;
 const SPONGE_CELLS: f32 = 60.0;
-const LEAK: f32 = 0.25;
+const LEAK: f32 = 0.45;
 const H_LIMIT: f32 = 0.40;
 const V_LIMIT: f32 = 12.0;
 /// A scene that was not updated for this many frames starts again from calm water.
@@ -111,6 +110,14 @@ const POND_Z0: f32 = -14.0;
 const POND_DEPTH: f32 = 24.0;
 /// Below this gate level the music has stopped and nothing is dropped; the water damps out faster.
 const CLOSED_GATE: f32 = 0.2;
+/// The pond accepts softer/less certain hits than the other drum-driven scenes: at the default slider,
+/// confidence 0.76 is enough (instead of 0.9). The slider still adjusts this in either direction.
+const HIT_SENSITIVITY: f32 = 2.0;
+const TOWERS: u32 = 11;
+
+fn pond_hits(tracker: &mut DrumHits, p: &SceneParams) -> Vec<Hit> {
+    tracker.update(p.drums(), p.gradient.clamp(0.2, 5.0) * HIT_SENSITIVITY, p.time as f64, p.gate > 0.5)
+}
 
 /// The line the drops start from: it fills most of the picture at any aspect, within sensible bounds (the Fireworks'
 /// and the storm's too, since a rectilinear view stretches whatever stands near the edges).
@@ -142,7 +149,7 @@ pub struct Impulse {
 pub fn pop_for(line: f32, strength: f32) -> (f32, f32) {
     let t = line.clamp(0.0, 1.0);
     let s = strength.clamp(0.0, 1.0);
-    (lerp(0.36, 0.11, t) * (0.75 + 0.45 * s), -(0.080 + 0.170 * s) * lerp(1.0, 0.55, t))
+    (lerp(0.36, 0.11, t) * (0.75 + 0.45 * s) * 1.15, -(0.080 + 0.170 * s) * lerp(1.0, 0.55, t) * 1.5)
 }
 
 /// Droplets that make rings: one for a light hit, up to five for a hard one with Density up; plus a few that only
@@ -437,7 +444,7 @@ impl Ripple {
             sim: None,
             cur: 0,
             pond: Pond::new(1),
-            hits: RiseHits::new(),
+            hits: DrumHits::new(),
             pending: VecDeque::new(),
             acc: 0.0,
             last_frame: 0,
@@ -518,7 +525,7 @@ impl Scene for Ripple {
         let Some(sim) = &self.sim else { return };
 
         let p = f.p;
-        let hits = self.hits.update(&p.rise, p.gradient.clamp(0.2, 5.0), p.time as f64, p.gate > 0.5);
+        let hits = pond_hits(&mut self.hits, p);
         let made = self.pond.step(&Input { now: p.time, gate: p.gate, hits: &hits, width: line_width(f.aspect), density: p.density });
         if std::env::var_os("GEQ_RPDEBUG").is_some() {
             // development aid: one line per impulse, for checking timing against a fixture's exact event times
@@ -579,7 +586,7 @@ impl Scene for Ripple {
         pass.set_pipeline(&self.water);
         pass.draw(0..6, 0..1);
         pass.set_pipeline(&self.towers);
-        pass.draw(0..6, 0..4);
+        pass.draw(0..6, 0..TOWERS);
         pass.set_pipeline(&self.drops_refl);
         pass.draw(0..6, 0..MAX_DROPS as u32);
         pass.set_pipeline(&self.drops);
@@ -618,6 +625,44 @@ impl Scene for Ripple {
     }
 }
 
+/// Hands out timestamp writes so the scene's whole update (every solver pass and the shading) is one
+/// measured span: the first pass records the start and the last one the end.
+struct Stamper<'a> {
+    ts: Option<&'a wgpu::RenderPassTimestampWrites<'a>>,
+    first: bool,
+}
+
+impl<'a> Stamper<'a> {
+    fn next(&mut self, last: bool) -> Option<wgpu::RenderPassTimestampWrites<'a>> {
+        let t = self.ts?;
+        let begin = if self.first { t.beginning_of_pass_write_index } else { None };
+        let end = if last { t.end_of_pass_write_index } else { None };
+        self.first = false;
+        (begin.is_some() || end.is_some())
+            .then(|| wgpu::RenderPassTimestampWrites { query_set: t.query_set, beginning_of_pass_write_index: begin, end_of_pass_write_index: end })
+    }
+}
+
+fn run_pass(enc: &mut wgpu::CommandEncoder, label: &str, pipe: &wgpu::RenderPipeline, bg: &wgpu::BindGroup, dst: &wgpu::TextureView, ts: Option<wgpu::RenderPassTimestampWrites>) {
+    let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: dst,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: ts,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(pipe);
+    pass.set_bind_group(0, bg, &[]);
+    pass.draw(0..3, 0..1);
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,6 +671,25 @@ mod tests {
 
     fn input<'a>(now: f32, gate: f32, hits: &'a [Hit]) -> Input<'a> {
         Input { now, gate, hits, width: W, density: 1.0 }
+    }
+
+    #[test]
+    fn pond_accepts_more_hits_but_still_respects_sensitivity_silence_and_duplicates() {
+        let mut p = SceneParams::for_tests();
+        p.time = 1.0;
+        p.n_drums = 1;
+        p.drums[0] = crate::drums::DrumHit {
+            t: 1.0, kind: crate::drums::Kind::Low, pos: 0.15, strength: 0.6, p: 0.8,
+        };
+        assert!(DrumHits::new().update(p.drums(), 1.0, 1.0, true).is_empty());
+        let mut tracker = DrumHits::new();
+        assert_eq!(pond_hits(&mut tracker, &p).len(), 1);
+        assert!(pond_hits(&mut tracker, &p).is_empty());
+        p.gradient = 0.5;
+        assert!(pond_hits(&mut DrumHits::new(), &p).is_empty());
+        p.gradient = 1.0;
+        p.gate = 0.0;
+        assert!(pond_hits(&mut DrumHits::new(), &p).is_empty());
     }
 
     #[test]
@@ -844,7 +908,7 @@ mod tests {
         let (mut worst_h, mut worst_v): (f32, f32) = (0.0, 0.0);
         for k in 0..1200 {
             // a heavy crater somewhere every few steps (80 a second, far beyond any music), for five seconds
-            let imps: Vec<(f32, f32, f32, f32)> = if k % 3 == 0 { vec![(rng.next() * 96.0, rng.next() * 64.0, 3.0 + 4.0 * rng.next(), -0.16)] } else { vec![] };
+            let imps: Vec<(f32, f32, f32, f32)> = if k % 3 == 0 { vec![(rng.next() * 96.0, rng.next() * 64.0, 3.0 + 4.0 * rng.next(), pop_for(0.0, 1.0).1)] } else { vec![] };
             f.step(0.7, 14.0, 30.0, &imps);
             worst_h = worst_h.max(f.s.iter().map(|s| s[0].abs()).fold(0.0, f32::max));
             worst_v = worst_v.max(f.s.iter().map(|s| s[1].abs()).fold(0.0, f32::max));

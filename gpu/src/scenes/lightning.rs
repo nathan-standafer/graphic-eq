@@ -1,12 +1,11 @@
 use super::*;
 use super::fireworks::{lerp, Rng};
 use super::particles::{Particles, SpawnPlan};
-use crate::modulation::{Hit, RiseHits};
+use crate::modulation::{DrumHits, Hit};
 
 /// Each hit strikes the glass floor as a bolt of branching light, where it landed on the line (kicks on the left,
-/// snares on the right), and the floor lights up beneath it and mirrors it. Hits come from the same detector as
-/// the Fireworks (`modulation::RiseHits`, the Fountain's rise judged against the music's own hardest hits), so
-/// Sensitivity means the same thing. The bolt itself is built in the vertex shader from the strike's seed
+/// snares on the right), and the floor lights up beneath it and mirrors it. Hits come from the same drum detector as
+/// the Fireworks (`drums.rs`, through `modulation::DrumHits`), so Sensitivity means the same thing. The bolt itself is built in the vertex shader from the strike's seed
 /// (midpoint displacement, see `lightning.wgsl`); the CPU only keeps the table of strikes and decides how many
 /// return strokes and branches each gets. Lows strike thick, with few branches, and send a thunder ring across
 /// the floor; highs are thin, many-branched and short. Between strikes faint discharges stand on the spectrum
@@ -21,7 +20,7 @@ pub struct Lightning {
     sprites: wgpu::RenderPipeline,
     parts: Particles,
     storm: Storm,
-    hits: RiseHits,
+    hits: DrumHits,
     lt_buf: wgpu::Buffer,
     lt_bg: wgpu::BindGroup,
     last_frame: u64,
@@ -247,7 +246,7 @@ impl Lightning {
             sprites: ctx.pipeline_with(&parts.draw_layout, &sh, "lightning_sparks", "vs_spark", "fs_sprite", glow),
             parts,
             storm: Storm::new(1),
-            hits: RiseHits::new(),
+            hits: DrumHits::new(),
             lt_buf,
             lt_bg,
             last_frame: 0,
@@ -273,7 +272,7 @@ impl Scene for Lightning {
         self.last_frame = f.frame_no;
 
         let p = f.p;
-        let hits = self.hits.update(&p.rise, p.gradient.clamp(0.2, 5.0), p.time as f64, p.gate > 0.5);
+        let hits = self.hits.update(p.drums(), p.gradient.clamp(0.2, 5.0), p.time as f64, p.gate > 0.5);
         let strikes = self.storm.step(&Input { now: p.time, gate: p.gate, hits: &hits, width: Self::width(f.aspect), density: p.density });
         if std::env::var_os("GEQ_LTDEBUG").is_some() {
             // development aid: one line per strike, for checking timing against a fixture's exact event times

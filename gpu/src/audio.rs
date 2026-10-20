@@ -1,8 +1,9 @@
 //! Owns the EQ engine, the analyzer and the stream routing.
 
-use crate::analyzer::{Analyzer, Dsp, Levels, Onset, Shared, WAVE_CAP};
+use crate::analyzer::{Analyzer, Dsp, Levels, Onset, Shared};
 use crate::bands;
 use crate::clock;
+use crate::drums::DrumHit;
 use crate::engine::Engine;
 use crate::routing::{self, VIRTUAL_SINK};
 use crate::synth::{Fixture, Synth, RATE};
@@ -16,7 +17,7 @@ enum SynthSource {
     /// Generated in real time on its own thread (performance runs, interactive use).
     Thread { shared: Arc<Shared>, stop: Arc<AtomicBool> },
     /// Advanced by the UI one frame at a time on a simulated clock (deterministic captures).
-    Stepped { dsp: Dsp, synth: Synth, levels: Levels, events: Vec<Onset>, wave: Vec<[f32; 2]> },
+    Stepped { dsp: Dsp, synth: Synth, levels: Levels, events: Vec<Onset>, drums: Vec<DrumHit> },
 }
 
 pub struct Audio {
@@ -77,7 +78,7 @@ impl Audio {
             None => Synth::new(fx),
         };
         let src = if stepped {
-            SynthSource::Stepped { dsp: Dsp::new(), synth: make(), levels: Levels::default(), events: Vec::new(), wave: Vec::new() }
+            SynthSource::Stepped { dsp: Dsp::new(), synth: make(), levels: Levels::default(), events: Vec::new(), drums: Vec::new() }
         } else {
             let shared = Arc::new(Shared::default());
             let stop = Arc::new(AtomicBool::new(false));
@@ -99,9 +100,8 @@ impl Audio {
                     r.clear();
                     synth.render((want - have) as usize, &mut l, &mut r);
                     let t_end = origin + synth.position() as f64 / RATE;
-                    sh.push_wave(&l, &r);
                     let (lv, ev) = dsp.push(&l, &r, t_end);
-                    sh.publish(lv, ev);
+                    sh.publish(lv, ev, dsp.take_drums());
                 }
             });
             SynthSource::Thread { shared, stop }
@@ -129,20 +129,18 @@ impl Audio {
 
     /// Stepped sources only: advance the simulated clock by `dt` seconds. `now` is the sim time after the step.
     pub fn advance(&mut self, now: f64) {
-        if let Some((_, SynthSource::Stepped { dsp, synth, levels, events, wave })) = &mut self.synth {
+        if let Some((_, SynthSource::Stepped { dsp, synth, levels, events, drums })) = &mut self.synth {
             let target = (now * RATE as f64).round() as u64;
             let n = target.saturating_sub(synth.position()) as usize;
             if n > 0 {
                 let (mut l, mut r) = (Vec::with_capacity(n), Vec::with_capacity(n));
                 synth.render(n, &mut l, &mut r);
-                wave.extend(l.iter().zip(&r).map(|(a, b)| [*a, *b]));
-                let keep = wave.len().saturating_sub(WAVE_CAP);
-                wave.drain(..keep);
                 let (lv, ev) = dsp.push(&l, &r, synth.position() as f64 / RATE as f64);
                 if let Some(lv) = lv {
                     *levels = lv;
                 }
                 events.extend(ev);
+                drums.extend(dsp.take_drums());
             }
         }
     }
@@ -255,12 +253,12 @@ impl Audio {
         }
     }
 
-    /// Samples (left, right) received since the last call, each exactly once, oldest first.
-    pub fn take_wave(&mut self) -> Vec<[f32; 2]> {
+    /// Drum hits found since the last call, oldest first.
+    pub fn take_drums(&mut self) -> Vec<DrumHit> {
         match &mut self.synth {
-            Some((_, SynthSource::Stepped { wave, .. })) => std::mem::take(wave),
-            Some((_, SynthSource::Thread { shared, .. })) => shared.take_wave(),
-            None => self.analyzer.as_ref().map(|a| a.shared.take_wave()).unwrap_or_default(),
+            Some((_, SynthSource::Stepped { drums, .. })) => std::mem::take(drums),
+            Some((_, SynthSource::Thread { shared, .. })) => std::mem::take(&mut *shared.drums.lock().unwrap()),
+            None => self.analyzer.as_ref().map(|a| std::mem::take(&mut *a.shared.drums.lock().unwrap())).unwrap_or_default(),
         }
     }
 

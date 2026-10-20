@@ -12,6 +12,7 @@
 //! analyzer's calibrated levels and the EQ gains are untouched.
 
 use crate::analyzer::{Levels, Onset, ENV_TAU};
+use crate::drums::{DrumHit, Kind};
 
 const RING_CAP: usize = 8;
 const RING_LIFE: f64 = 3.2;
@@ -95,8 +96,8 @@ impl RiseNorm {
     }
 }
 
-/// A drum-like event found in the rise: where along the emitter line it landed (0 bass .. 1 treble) and how
-/// hard it was, 0 at the lightest hit worth reporting and 1 at the fountain's full strength.
+/// A drum hit as the scenes react to it: where along the emitter line it landed (0 bass .. 1 treble) and how
+/// hard it was, 0 at the lightest hit worth reporting and 1 at the hardest.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
     pub pos: f32,
@@ -108,32 +109,139 @@ const HIT_MIN: f32 = 0.18;
 /// Peaks closer than this (in bins, of 192) are one hit; farther apart they are two only when the rise
 /// between them dips below `HIT_VALLEY` of the lower peak, so a snare's broad plateau stays one hit while a
 /// kick and a snare landing together are two. Beyond `HIT_FAR` bins they are always two.
+/// How sure the drum model must be of a hit (its probability) at Sensitivity 1, how much each doubling of
+/// Sensitivity lowers that, and the range it is kept to (the detector itself reports nothing below
+/// `DRUM_P_MIN`). 0.9 is the design point: against 0.8 it costs a few percent of the kicks, snares and cymbals
+/// and a tenth of the hats on the test songs, and halves the false hits on recordings with no drums in them.
+const DRUM_P: f32 = 0.9;
+const DRUM_P_PER_OCTAVE: f32 = 0.14;
+const DRUM_P_MIN: f32 = 0.7;
+const DRUM_P_MAX: f32 = 0.97;
+/// A passage dense with hits is thinned to its harder ones: hits in the last `HIT_BUDGET_S` count by their kind
+/// (a hat is `HAT_WEIGHT` of a kick or a snare), the first `DENSE_FREE` are free, and every unit beyond raises the
+/// strength the next one needs by `DENSE_RAISE`. Eighth-note hats alone (four a second) are never thinned; a
+/// groove with hats on top of its kicks and snares keeps its harder hats and loses the faint ones.
+const DENSE_FREE: f32 = 4.0;
+const DENSE_RAISE: f32 = 0.1;
+const HAT_WEIGHT: f32 = 0.75;
+
+/// Turns the drum detector's hits (`drums::DrumHit`) into what a scene reacts to. Each hit arrives once: the
+/// frame's list is read with a memory of what has been seen, so a list offered twice does not fire twice.
+/// Sensitivity is the model's confidence a hit needs (1 = the designed 0.9; higher accepts less certain hits)
+/// and the strength of a hit is how hard it was against the hardest recent hit of its kind.
+pub struct DrumHits {
+    last: [f64; 3],
+    /// Hits reported lately as (time, weight), for thinning dense music.
+    recent: Vec<(f64, f32)>,
+}
+
+impl DrumHits {
+    pub fn new() -> DrumHits {
+        DrumHits { last: [f64::NEG_INFINITY; 3], recent: Vec::new() }
+    }
+
+    pub fn reset(&mut self) {
+        *self = DrumHits::new();
+    }
+
+    /// The confidence a hit needs at this sensitivity.
+    pub fn needed_p(sens: f32) -> f32 {
+        (DRUM_P - DRUM_P_PER_OCTAVE * sens.max(0.05).log2()).clamp(DRUM_P_MIN, DRUM_P_MAX)
+    }
+
+    /// `drums` are the hits found since the last frame, `now` is the scene clock, `gate_open` whether the music is
+    /// loud enough to count. Returns the hits to react to now.
+    pub fn update(&mut self, drums: &[DrumHit], sens: f32, now: f64, gate_open: bool) -> Vec<Hit> {
+        self.recent.retain(|(t, _)| now - t < HIT_BUDGET_S);
+        let need = Self::needed_p(sens);
+        let mut out = Vec::new();
+        for h in drums {
+            let k = h.kind as usize;
+            if h.t <= self.last[k] {
+                continue;
+            }
+            self.last[k] = h.t;
+            if !gate_open || h.p < need {
+                continue;
+            }
+            let load: f32 = self.recent.iter().map(|(_, w)| w).sum();
+            let strength = (0.2 + 0.8 * h.strength).clamp(0.0, 1.0);
+            if strength < HIT_MIN + DENSE_RAISE * (load - DENSE_FREE).max(0.0) {
+                continue;
+            }
+            self.recent.push((now, if h.kind == Kind::High { HAT_WEIGHT } else { 1.0 }));
+            out.push(Hit { pos: h.pos, strength });
+        }
+        out
+    }
+}
+
+/// A burst from a column of the 3D columns' Sparks overlay is sized by how many LED segments its peak cap
+/// jumped: from `PUSH_MIN_SEGMENTS` (the smallest burst) to `PUSH_FULL_SEGMENTS` (the biggest).
+pub const PUSH_MIN_SEGMENTS: f32 = 5.0;
+pub const PUSH_FULL_SEGMENTS: f32 = 25.0;
+
+/// Sparks are rare and big on purpose: a hi-hat only throws them when it is an accent, this much of the hardest
+/// recent one (a tick of hats at 8 a second would keep the treble columns in a constant shower).
+pub const SPARK_HAT_MIN: f32 = 0.85;
+/// Burst size follows the strength to this power: most hits throw a modest fan, the hardest a big one.
+const SPARK_SIZE_POWER: f32 = 1.5;
+
+/// The drum hits the Sparks overlay reacts to: kicks, snares and toms, and hats and cymbals only at an accent.
+pub fn spark_worthy(drums: &[DrumHit]) -> Vec<DrumHit> {
+    drums.iter().filter(|d| d.kind != Kind::High || d.strength >= SPARK_HAT_MIN).copied().collect()
+}
+
+/// Which column of the 3D columns each hit lands on (bass left, treble right) and how big a burst it throws there,
+/// as the cap push (share of the full scale) the Sparks scene expects; 0 for no burst.
+pub fn column_pushes(hits: &[Hit]) -> [f32; 11] {
+    let mut out = [0.0f32; 11];
+    for h in hits {
+        let col = ((h.pos * 10.0).round() as usize).min(10);
+        let segments = PUSH_MIN_SEGMENTS + (PUSH_FULL_SEGMENTS - PUSH_MIN_SEGMENTS) * h.strength.clamp(0.0, 1.0).powf(SPARK_SIZE_POWER);
+        out[col] = out[col].max(segments / LED_SEGMENTS);
+    }
+    out
+}
+
+#[cfg(test)]
 const HIT_NEAR: usize = 10;
+#[cfg(test)]
 const HIT_FAR: usize = 60;
+#[cfg(test)]
 const HIT_VALLEY: f32 = 0.7;
 /// A hit is reported once its rise has stopped climbing (it reaches its height within about two analysis hops,
 /// so the first frame over the threshold understates it), or at the latest after this long.
+#[cfg(test)]
 const HIT_SETTLE_S: f64 = 0.015;
 /// One hit per position per this long, where a position is `HIT_NEAR_POS` of the line either side.
+#[cfg(test)]
 const HIT_REFRACTORY_S: f64 = 0.12;
+#[cfg(test)]
 const HIT_NEAR_POS: f32 = 0.12;
 /// Dense music is thinned to its hardest hits: every hit reported in the last `HIT_BUDGET_S` raises the
 /// strength the next one needs by `HIT_RAISE`.
 const HIT_BUDGET_S: f64 = 1.0;
+#[cfg(test)]
 const HIT_RAISE: f32 = 0.12;
 /// One event is at most this many hits: a snare is broadband, with a body, a noisy middle and a crack, and
 /// every part clears the threshold, but it is one event. Hits that start within `HIT_EVENT_S` of each other
 /// count as one event, and only its two strongest parts are reported (a kick and a snare landing together
 /// are still a pair).
+#[cfg(test)]
 const HIT_EVENT_MAX: usize = 2;
+#[cfg(test)]
 const HIT_EVENT_S: f64 = 0.06;
 /// A hit has to stand out from what its frequency is already doing: each bin's rise is judged after taking off
 /// `HIT_BG_K` times its own slow average (time constant `HIT_BG_TAU_S`). A sustained chord whose close partials
 /// beat inside the 21 ms analysis window makes the rise jitter all the time, at the very frequencies of the
 /// chord, and without this it detonated about twice a second; a drum rises far above its own background.
+#[cfg(test)]
 const HIT_BG_K: f32 = 2.0;
+#[cfg(test)]
 const HIT_BG_TAU_S: f32 = 0.6;
 
+#[cfg(test)]
 struct PendingHit {
     pos: f32,
     best: f32,
@@ -145,6 +253,7 @@ struct PendingHit {
 /// time at its position. Strength is measured above the fountain's threshold (`SPARK_START` to `SPARK_FULL`
 /// at the sensitivity), so the Sensitivity setting means the same thing here as it does there. Fireworks
 /// detonates a shell on each hit; a scene of lightning strikes would take the same events.
+#[cfg(test)]
 pub struct RiseHits {
     pending: Vec<PendingHit>,
     /// Hits found lately as (position, time, whether it was reported), for the refractory time (which a hit the
@@ -160,6 +269,7 @@ pub struct RiseHits {
     bg_k: f32,
 }
 
+#[cfg(test)]
 impl RiseHits {
     pub fn new() -> RiseHits {
         RiseHits { pending: Vec::new(), recent: Vec::new(), starts: Vec::new(), background: Vec::new(), last: None, min_strength: HIT_MIN, bg_k: HIT_BG_K }
@@ -284,71 +394,6 @@ impl RiseHits {
 /// position is counted in them.
 pub const LED_SEGMENTS: f32 = 30.0;
 
-/// A peak cap pushes higher on every frame its level sits at the peak, so rises are summed over a short
-/// window, and a burst is reported when a push has added up to `PEAK_HIT_MIN` and settled: one hit is one
-/// burst, as big as the whole push (a hit's cap climbs over a few frames, and reporting the first part would
-/// split it in two and understate both). Rises older than the window no longer count, so a slow climb never
-/// adds up to a hit, and pushes that follow each other within `PEAK_HIT_GAP` are held and reported together.
-pub struct PeakHits {
-    prev: [f32; 11],
-    /// Each column's recent rises as (time, size), the push now being summed.
-    rises: [Vec<(f64, f32)>; 11],
-    /// Time since the cap last rose, and when the push now being summed began.
-    quiet: [f32; 11],
-    since: [f64; 11],
-    last: [f64; 11],
-}
-
-/// How far a cap must have risen (of the full scale) for a burst: five LED segments.
-pub const PEAK_HIT_MIN: f32 = 5.0 / LED_SEGMENTS;
-/// The shortest gap between bursts of one column, and how long a rise counts toward a push.
-const PEAK_HIT_GAP: f64 = 0.12;
-const PEAK_HIT_WINDOW_S: f64 = 0.25;
-/// A push is over when the cap has not risen for this long (a frame between two analysis hops may see no
-/// change), and is reported anyway once it has lasted `PEAK_HIT_MAX_WAIT`, so a long climb is not held back.
-const PEAK_HIT_SETTLE_S: f32 = 0.025;
-const PEAK_HIT_MAX_WAIT: f64 = 0.08;
-
-impl PeakHits {
-    pub fn new() -> PeakHits {
-        PeakHits {
-            prev: [0.0; 11],
-            rises: std::array::from_fn(|_| Vec::new()),
-            quiet: [1.0; 11],
-            since: [f64::NEG_INFINITY; 11],
-            last: [f64::NEG_INFINITY; 11],
-        }
-    }
-
-    /// `peaks` are the caps' positions (0..1) this frame. Returns each column's burst strength (how far the
-    /// cap rose, as a share of the full scale), 0 for none.
-    pub fn update(&mut self, peaks: &[f32; 11], now: f64, dt: f32) -> [f32; 11] {
-        let mut out = [0.0; 11];
-        for i in 0..11 {
-            let rise = peaks[i] - self.prev[i];
-            self.prev[i] = peaks[i];
-            if rise > 0.0 {
-                if self.quiet[i] >= PEAK_HIT_SETTLE_S {
-                    self.since[i] = now;
-                }
-                self.rises[i].push((now, rise));
-                self.quiet[i] = 0.0;
-            } else {
-                self.quiet[i] += dt;
-            }
-            self.rises[i].retain(|(t, _)| now - t <= PEAK_HIT_WINDOW_S);
-            let push: f32 = self.rises[i].iter().map(|(_, r)| r).sum();
-            let over = self.quiet[i] >= PEAK_HIT_SETTLE_S || now - self.since[i] >= PEAK_HIT_MAX_WAIT;
-            if push >= PEAK_HIT_MIN && over && now - self.last[i] >= PEAK_HIT_GAP {
-                out[i] = push;
-                self.rises[i].clear();
-                self.last[i] = now;
-            }
-        }
-        out
-    }
-}
-
 fn smooth(cur: &mut f32, target: f32, dt: f32, tau_up: f32, tau_down: f32) {
     let tau = if target > *cur { tau_up } else { tau_down };
     *cur += (target - *cur) * (1.0 - (-dt / tau).exp());
@@ -469,81 +514,65 @@ mod tests {
         assert_eq!(s.rings[0][1], 0.0);
     }
 
-    /// Feeds one frame per entry of `rises` (in LED segments) to column 3, then `quiet` frames with no
-    /// change, and returns each burst as (frame, segments).
-    fn bursts_for(ph: &mut PeakHits, caps: &mut [f32; 11], t: &mut f64, rises: &[f32], quiet: usize) -> Vec<(usize, f32)> {
-        let dt = 1.0 / 60.0;
-        let mut out = Vec::new();
-        for (k, r) in rises.iter().cloned().chain(std::iter::repeat(0.0).take(quiet)).enumerate() {
-            caps[3] += r / LED_SEGMENTS;
-            *t += dt as f64;
-            let h = ph.update(caps, *t, dt)[3];
-            if h > 0.0 {
-                out.push((k, h * LED_SEGMENTS));
-            }
+    fn drum(t: f64, kind: Kind, p: f32, strength: f32) -> DrumHit {
+        DrumHit { t, kind, pos: 0.2, strength, p }
+    }
+
+    #[test]
+    fn a_drum_hit_reaches_a_scene_once_even_if_its_list_is_offered_twice() {
+        let mut dh = DrumHits::new();
+        let list = [drum(1.0, Kind::Low, 0.95, 0.9), drum(1.0, Kind::High, 0.9, 0.5)];
+        assert_eq!(dh.update(&list, 1.0, 1.01, true).len(), 2);
+        assert!(dh.update(&list, 1.0, 1.02, true).is_empty());
+        // a later hit of the same kind is new
+        assert_eq!(dh.update(&[drum(1.2, Kind::Low, 0.95, 0.9)], 1.0, 1.21, true).len(), 1);
+    }
+
+    #[test]
+    fn sensitivity_sets_how_sure_the_model_must_be_and_a_closed_gate_reports_nothing() {
+        let unsure = [drum(2.0, Kind::Snare, 0.8, 0.8)];
+        assert!(DrumHits::new().update(&unsure, 1.0, 2.0, true).is_empty());
+        assert_eq!(DrumHits::new().update(&unsure, 2.0, 2.0, true).len(), 1, "doubling the sensitivity accepts p 0.8");
+        assert!(DrumHits::new().update(&[drum(2.0, Kind::Snare, 0.9, 0.8)], 0.3, 2.0, true).is_empty(), "and lowering it asks for more");
+        assert!(DrumHits::new().update(&[drum(2.0, Kind::Snare, 0.99, 0.8)], 1.0, 2.0, false).is_empty());
+        assert!((DrumHits::needed_p(1.0) - 0.9).abs() < 1e-6 && DrumHits::needed_p(100.0) >= DRUM_P_MIN);
+    }
+
+    #[test]
+    fn dense_hats_are_thinned_but_an_ordinary_pattern_and_the_kicks_get_through() {
+        // eighth-note hats at 120 BPM (4 a second) are never thinned
+        let mut dh = DrumHits::new();
+        let steady = (0..24).filter(|i| dh.update(&[drum(5.0 + *i as f64 * 0.25, Kind::High, 0.9, 0.2)], 1.0, 5.0 + *i as f64 * 0.25, true).len() == 1).count();
+        assert_eq!(steady, 24);
+        // a frantic roll (20 a second) loses some of them
+        let mut dh = DrumHits::new();
+        let mut roll = 0;
+        for i in 0..40 {
+            let t = 5.0 + i as f64 * 0.05;
+            roll += dh.update(&[drum(t, Kind::High, 0.9, 0.2)], 1.0, t, true).len();
         }
-        out
+        assert!(roll < 40, "all {roll} of 40 hats of a roll got through");
+        // and a full-strength kick in the middle of it is never thinned away
+        let kick = dh.update(&[drum(7.01, Kind::Low, 0.99, 1.0)], 1.0, 7.01, true);
+        assert_eq!(kick.len(), 1);
+        assert!((kick[0].strength - 1.0).abs() < 1e-6 && (kick[0].pos - 0.2).abs() < 1e-6);
     }
 
     #[test]
-    fn peak_bursts_need_a_push_of_five_segments_and_are_sized_by_it() {
-        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
-        // four segments in one frame is no event, five is
-        assert!(bursts_for(&mut ph, &mut caps, &mut t, &[4.0], 30).is_empty(), "a four-segment push threw sparks");
-        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
-        let b = bursts_for(&mut ph, &mut caps, &mut t, &[5.01], 30);
-        assert_eq!(b.len(), 1, "a five-segment push is one burst");
-        assert!((b[0].1 - 5.01).abs() < 0.01, "its strength is the push");
-        // a hit whose cap climbs over four frames is one burst of the whole climb, after it has settled
-        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
-        let b = bursts_for(&mut ph, &mut caps, &mut t, &[3.3, 3.8, 1.1, 1.0], 30);
-        assert_eq!(b.len(), 1, "one hit, one burst: {b:?}");
-        assert!((b[0].1 - 9.2).abs() < 0.01, "got {b:?}");
-        assert!(b[0].0 <= 8, "reported within a few frames of the climb ending: {b:?}");
-        // a bigger push is a bigger burst
-        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
-        let big = bursts_for(&mut ph, &mut caps, &mut t, &[14.0], 30);
-        assert!(big[0].1 > b[0].1);
-        // and only the column that rose reports
-        let mut ph = PeakHits::new();
-        let mut caps = [0.0f32; 11];
-        caps[5] = 0.4;
-        let dt = 1.0 / 60.0;
-        assert!(ph.update(&caps, 1.0, dt).iter().all(|v| *v == 0.0), "reported before the push settled");
-        let settled = [1.0 + 1.0 * dt as f64, 1.0 + 2.0 * dt as f64].map(|now| ph.update(&caps, now, dt));
-        assert!((settled[1][5] - 0.4).abs() < 1e-6 && settled[1][4] == 0.0, "{settled:?}");
+    fn sparks_take_kicks_and_snares_but_only_accented_hats() {
+        let ds = [drum(1.0, Kind::Low, 0.95, 0.3), drum(1.1, Kind::Snare, 0.95, 0.4), drum(1.2, Kind::High, 0.95, 0.5), drum(1.3, Kind::High, 0.95, 0.9)];
+        let kinds: Vec<Kind> = spark_worthy(&ds).iter().map(|d| d.kind).collect();
+        assert_eq!(kinds, vec![Kind::Low, Kind::Snare, Kind::High], "a plain hat is left out, an accent is kept");
+        assert!(spark_worthy(&ds)[2].strength >= SPARK_HAT_MIN);
     }
 
     #[test]
-    fn slow_climbs_and_falling_caps_throw_nothing() {
-        // a cap that creeps up a hair a frame is no event
-        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
-        assert!(bursts_for(&mut ph, &mut caps, &mut t, &[0.05; 120], 30).is_empty(), "bursts from a slow creep");
-        // a staircase of one segment every tenth of a second (3 segments a second) never adds up
-        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
-        let stairs: Vec<f32> = (0..300).map(|k| if k % 6 == 0 { 1.0 } else { 0.0 }).collect();
-        assert!(bursts_for(&mut ph, &mut caps, &mut t, &stairs, 30).is_empty(), "bursts from a staircase");
-        // a falling cap is no event
-        let mut ph = PeakHits::new();
-        let mut caps = [0.0f32; 11];
-        caps[5] = 0.8;
-        ph.update(&caps, 1.0, 1.0 / 60.0);
-        caps[5] = 0.3;
-        assert_eq!(ph.update(&caps, 2.0, 1.0 / 60.0)[5], 0.0);
-    }
-
-    #[test]
-    fn a_long_climb_is_reported_without_waiting_for_it_to_end_and_bursts_are_rate_limited() {
-        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
-        // two segments every frame for a second: reported while it climbs, no faster than the rate limit
-        let b = bursts_for(&mut ph, &mut caps, &mut t, &[2.0; 60], 0);
-        assert!(b.len() >= 5 && b.len() <= 9, "got {b:?}");
-        assert!(b.windows(2).all(|w| (w[1].0 - w[0].0) as f64 / 60.0 >= PEAK_HIT_GAP - 1e-6), "{b:?}");
-        // a second push right after a burst is held back by the rate limit, then reported
-        let (mut ph, mut caps, mut t) = (PeakHits::new(), [0.0f32; 11], 0.0);
-        let b = bursts_for(&mut ph, &mut caps, &mut t, &[8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 10.0], 30);
-        assert_eq!(b.len(), 2, "{b:?}");
-        assert!((b[1].0 - b[0].0) as f64 / 60.0 >= PEAK_HIT_GAP - 1e-6, "{b:?}");
+    fn hits_land_on_the_column_of_their_place_and_big_hits_throw_bigger_bursts() {
+        let p = column_pushes(&[Hit { pos: 0.0, strength: 0.0 }, Hit { pos: 0.52, strength: 1.0 }, Hit { pos: 1.0, strength: 0.5 }]);
+        assert!((p[0] * LED_SEGMENTS - PUSH_MIN_SEGMENTS).abs() < 1e-4, "smallest burst {}", p[0] * LED_SEGMENTS);
+        assert!((p[5] * LED_SEGMENTS - PUSH_FULL_SEGMENTS).abs() < 1e-4, "biggest burst {}", p[5] * LED_SEGMENTS);
+        assert!(p[10] > p[0] && p[10] < p[5]);
+        assert_eq!(p.iter().filter(|v| **v > 0.0).count(), 3);
     }
 
     #[test]

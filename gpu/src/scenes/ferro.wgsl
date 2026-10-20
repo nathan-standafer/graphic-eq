@@ -2,7 +2,7 @@
 // (see ferro_height.wgsl). Nothing on it is lit by a surface light: it is a black mirror, and what it shows is
 // a procedural studio of a few strip lights in theme colours (a long one overhead, two tall ones at the sides,
 // two behind it for the rim, a thin one low in front) that drifts slowly around it. The floor shows the same
-// lights, the orb's mirror image, and the ring of eleven LEDs that holds the orb up.
+// lights, the orb's mirror image, and eleven floor spikes rising from the LEDs around the ring.
 @group(1) @binding(0) var<uniform> o: OrbU;
 @group(1) @binding(1) var hmap: texture_2d<f32>;
 @group(1) @binding(2) var hsamp: sampler;
@@ -12,6 +12,73 @@ const MESH_Y: u32 = 192u;
 const FLOOR_EXTENT: f32 = 600.0;
 const FLOOR_CLEAR: f32 = 0.05;      // the sphere never dips below this height
 const F0: f32 = 0.07;               // reflectance of the fluid looking straight at it
+const FLOOR_SPIKE_SIDES: u32 = 32u;
+const FLOOR_SPIKE_ROWS: u32 = 24u;
+const FLOOR_SPIKE_HEIGHT: f32 = 2.2;
+const FLOOR_SPIKE_RADIUS: f32 = 0.21;
+const FLOOR_SPIKE_TIP_RADIUS: f32 = 0.07;
+
+// Shared by the floor LEDs and their spikes: bass at the left, treble at the right.
+fn floor_site(i: u32) -> vec2<f32> {
+  let a = OPI * (1.0 - f32(i) / 10.0);
+  return vec2<f32>(cos(a), sin(a)) * o.c.x;
+}
+
+struct SpikeOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) p: vec3<f32>,
+  @location(1) n: vec3<f32>,
+  @location(2) t: f32,
+  @location(3) @interpolate(flat) band: u32,
+};
+
+fn floor_spike_vertex(vi: u32, i: u32, mirror: bool) -> SpikeOut {
+  // Winding faces outward; the final rows form a smooth, rounded crown.
+  var cs = array<vec2<u32>, 6>(
+    vec2<u32>(0u, 0u), vec2<u32>(0u, 1u), vec2<u32>(1u, 0u),
+    vec2<u32>(1u, 0u), vec2<u32>(0u, 1u), vec2<u32>(1u, 1u));
+  let cell = vi / 6u;
+  let corner = cs[vi % 6u];
+  let a = OTAU * f32(cell % FLOOR_SPIKE_SIDES + corner.x) / f32(FLOOR_SPIKE_SIDES);
+  let t = f32(cell / FLOOR_SPIKE_SIDES + corner.y) / f32(FLOOR_SPIKE_ROWS);
+  let radial = vec2<f32>(cos(a), sin(a));
+  // lvl is the same smoothed, range/sensitivity-adjusted level the column LEDs display.
+  // No spring or hit multiplier: a steady band holds its height and silence retracts to the floor.
+  let h = clamp(lvl(i), 0.0, 1.0) * FLOOR_SPIKE_HEIGHT;
+  // Concave fluid flanks meet a hemispherical cap tangentially. Reserve eight rows for the cap
+  // so its silhouette and reflected highlights stay smooth; short spikes flatten into the floor.
+  let cap = min(FLOOR_SPIKE_TIP_RADIUS, h * 0.35);
+  let stem = max(h - cap, 0.001);
+  let shoulder = 2.0 / 3.0;
+  var radius: f32;
+  var y: f32;
+  var n: vec3<f32>;
+  if (t < shoulder) {
+    let s = t / shoulder;
+    radius = cap + (FLOOR_SPIKE_RADIUS - cap) * (1.0 - s) * (1.0 - s);
+    y = (h - cap) * s;
+    let slope = 2.0 * (FLOOR_SPIKE_RADIUS - cap) * (1.0 - s) / stem;
+    n = normalize(vec3<f32>(radial.x, slope, radial.y));
+  } else {
+    let angle = (t - shoulder) / (1.0 - shoulder) * (0.5 * OPI);
+    let c = max(cos(angle), 0.0);
+    let s = sin(angle);
+    radius = cap * c;
+    y = h - cap + cap * s;
+    n = vec3<f32>(radial.x * c, s, radial.y * c);
+  }
+  let xz = floor_site(i) + radial * radius;
+  let p = vec3<f32>(xz.x, y, xz.y);
+  let q = vec3<f32>(p.x, select(p.y, -p.y, mirror), p.z);
+  return SpikeOut(u.vp * vec4<f32>(q, 1.0), p, n, y / max(h, 0.001), i);
+}
+
+@vertex fn vs_floor_spike(@builtin(vertex_index) vi: u32, @builtin(instance_index) i: u32) -> SpikeOut {
+  return floor_spike_vertex(vi, i, false);
+}
+@vertex fn vs_floor_spike_refl(@builtin(vertex_index) vi: u32, @builtin(instance_index) i: u32) -> SpikeOut {
+  return floor_spike_vertex(vi, i, true);
+}
 
 // ---- the mesh. `stride` 2 draws every second vertex (the reflection is soft anyway).
 struct OrbOut {
@@ -108,8 +175,7 @@ fn floor_light(q: vec3<f32>, w: f32) -> vec3<f32> {
       let nw = 0.07 + w;
       let nk = (0.07 / nw) * (0.07 / nw);
       for (var i = 0u; i < 11u; i++) {
-        let a = OPI * (1.0 - f32(i) / 10.0);
-        let d = q.xz - vec2<f32>(cos(a), sin(a)) * o.c.x;
+        let d = q.xz - floor_site(i);
         let l = lvl(i);
         c += palette(clamp(l * 0.85, 0.0, 1.0), f32(i) / 10.0) * (0.03 + 2.4 * l * l) * (1.0 + u.flash * 0.9 * band_env(i)) * exp(-0.5 * dot(d, d) / (nw * nw)) * nk;
       }
@@ -159,6 +225,39 @@ fn orb_color(p: vec3<f32>, nrm: vec3<f32>, hd: vec4<f32>, eye: vec3<f32>, soft: 
   let fres = 0.10 + 0.90 * pow(1.0 - clamp(v.y, 0.0, 1.0), 3.0);
   let fade = exp(-in.p.y * 0.30);
   return vec4<f32>(col * fres * fade * 0.9 * u.exposure, 1.0);
+}
+
+// The floor spikes share the orb's black reflective fluid, with a little of each LED's colour along
+// the silhouette and at the tip so all eleven levels remain legible between the studio highlights.
+fn floor_spike_color(in: SpikeOut, eye: vec3<f32>, soft: f32, rough: f32) -> vec3<f32> {
+  let n = normalize(in.n);
+  let v = normalize(eye - in.p);
+  let r = reflect(-v, n);
+  let ndv = clamp(dot(n, v), 0.0, 1.0);
+  let fres = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
+  let foot = length(fwidth(r)) * 0.8 + rough;
+  let level = clamp(lvl(in.band), 0.0, 1.0);
+  let tint = palette(in.t * level, f32(in.band) / 10.0);
+  let rim = pow(1.0 - ndv, 2.0);
+  let tip = smoothstep(0.72, 1.0, in.t);
+  var c = env(in.p, r, soft, foot) * fres + vec3<f32>(0.0015, 0.002, 0.004);
+  c += tint * (0.05 + 0.22 * rim + 0.65 * tip * tip) * (0.3 + 0.7 * level);
+  return c;
+}
+
+@fragment fn fs_floor_spike(in: SpikeOut) -> @location(0) vec4<f32> {
+  if (lvl(in.band) <= 0.001) { discard; }
+  return vec4<f32>(floor_spike_color(in, u.cam.xyz, 0.03, 0.012) * u.exposure, 1.0);
+}
+
+@fragment fn fs_floor_spike_refl(in: SpikeOut) -> @location(0) vec4<f32> {
+  if (lvl(in.band) <= 0.001) { discard; }
+  let eye_m = vec3<f32>(u.cam.x, -u.cam.y, u.cam.z);
+  let c = floor_spike_color(in, eye_m, 0.10, 0.12);
+  let q = vec3<f32>(in.p.x, -in.p.y, in.p.z);
+  let v = normalize(u.cam.xyz - q);
+  let fres = 0.10 + 0.90 * pow(1.0 - clamp(v.y, 0.0, 1.0), 3.0);
+  return vec4<f32>(c * fres * exp(-in.p.y * 0.30) * 0.9 * u.exposure, 1.0);
 }
 
 // ---- the floor

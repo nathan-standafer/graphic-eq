@@ -39,12 +39,11 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
 
 **Scenes**, each with curated *looks* (palette, exposure, bloom, motion):
 
-- **Spectrum Tunnel** - you look down a tube whose wall is the last three seconds of spectrum: bass along
-  the floor, treble along the ceiling, left channel on the left wall, right on the right. Loud bins
-  push inward, low-frequency hits launch luminous rings down the tube, treble accents flicker.
 - **3D columns** - segmented LED cores in glass housings on a glossy floor. Optional **Sparks** (Display
   menu, on by default): each lit column sheds embers from the top of its strip in proportion to its
-  level, and a column whose peak cap rises throws a fan of sparks that arc and skitter on the floor.
+  level, and every drum hit throws a fan of sparks from the column at its place on the frequency axis (kicks
+  from the bass columns, snares from the middle, hats only when accented), bigger the harder the hit; they arc and
+  skitter on the floor.
 - **Fountain** - sparks fly where the volume is rising. Every frequency reports how steeply its level is
   climbing right now, and a line of emitters along a glass floor throws sparks from the frequencies that
   are rising fastest: bass on the left, treble on the right. A kick is a steep rise in the lows, so it
@@ -63,31 +62,6 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   is etched into the surface at zero level, and the walls cast a little light onto the glass, with
   sheen from overhead light bars.
 
-- **Vectorscope** - the raw stereo signal drawn the way an analogue X/Y scope draws it: mono is a vertical
-  line, wide stereo opens into a ball, out-of-phase material tips toward the horizontal. The beam has a
-  sharp core in a soft halo, is bright where it dwells and faint where it races, and leaves a fading
-  phosphor afterglow (Display menu: **Persistence**). On wide screens the left and right waveforms run
-  across the outer thirds as triggered traces. The picture follows the signal's level so quiet music
-  still fills the tube; silence leaves just the graticule.
-
-- **Smoke Jets** - eleven nozzles along the floor, one per EQ band, each blowing smoke upward from a lamp
-  that burns with its band; in windowed mode they stand over their sliders. It is a real fluid (a 2D
-  stable-fluids solver on the GPU), so plumes sway, shed vortices and curl into their neighbours: a louder
-  band is a stronger jet (bass wide and slow, treble narrow and fast), and a drum hit is a puff that rolls up
-  into a mushroom-headed vortex ring. The smoke fades from bright, lit bases into darker translucent curls,
-  and clears when the music stops. Display menu: **thickness** (delicate wisps to dense plumes); **Motion**
-  is turbulence here (0 gives smooth, straight columns) and **Flash** scales the puffs.
-
-- **Chladni Sand** - three vibrating metal plates side by side (lows, mids, highs; one plate on a window too
-  narrow for three) covered in about half a million grains of sand. Each plate vibrates in the modes of its
-  strongest bands (higher bands, finer figures), and the sand is thrown about wherever the plate moves and
-  settles on the lines that stay still, drawing the classic Chladni figures. When the music changes the figure
-  dissolves and a new one forms; in silence the last one stays standing. A hit shakes the plate and lifts the
-  sand off its lines for a moment, and a lamp that drifts slowly over the plates makes grains glint. A strip
-  of lamps under each plate shows how hard it is vibrating. Display menu: **grains** (thin delicate lines to
-  bold ones); **Motion** is how hard a hit shakes the plates and how far the lamp drifts, **Flash** is the
-  glow of the sand on a hit.
-
 - **Ferrofluid Orb** - a glossy black sphere floating over a polished floor, with broad elastic lobes under
   192 fine spikes. The spikes sit on a spiral from the bottom of the sphere to the top, one per frequency of the
   spectrum, so a rising sweep climbs the orb; each is a spring that its frequency's level pulls up and that a hit
@@ -95,8 +69,10 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   constant: a louder band swells while a quieter one sinks) and wobble on onsets, and sustained bass makes the whole
   orb breathe. The surface is a black mirror: what it shows is a studio of strip lights in the theme's colours (a
   long one overhead, two tall ones at the sides, two behind it for the rim) that slowly drifts around it. The floor
-  mirrors the orb and carries the ring of eleven LEDs it floats over (bass at the left, filling with each band's
-  level); bass hits send a ripple out from the ring. In silence the spikes retract and it settles into a calm glass
+  mirrors the orb and carries the ring of eleven LEDs it floats over. Each LED anchors a curved floor spike with a rounded tip,
+  bass at the left and treble at the right, whose height follows its band's level with the same attack and fall
+  as the 3D columns. The floor mirrors these spikes too; bass hits send a ripple out from the ring. In silence
+  the floor spikes retract and the orb settles into a calm glass
   ball. Display menu: **spikes** (a smooth lobed blob to a hedgehog); **Motion** is how elastic the fluid is (spikes
   thrown out by hits, wobbling lobes, breathing, the lights' drift; 0 gives a fluid that only follows the loudness
   in still light), **Flash** is the pulse of the lights and the glow of the spike tips.
@@ -114,8 +90,8 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   columns still follow the music), **Flash** is the highlights that run up the rays.
 
 - **Fireworks** - rockets climb a dark sky while the music is loud, and a hit sets one off. Sustained energy
-  launches rockets from pads along a line (bass left, treble right, scattered in depth); a hit found in the
-  volume's rise (the same detector as the Fountain, judged against the music's own hardest hits) detonates the
+  launches rockets from pads along a line (bass left, treble right, scattered in depth); a drum hit (see
+  **Drum detection** below) detonates the
   rocket nearest its place on the line, at once and at the height it has reached, and with none near a mortar pops
   low, so a hit is never unanswered. A rocket nobody sets off bursts at its apex, small and dim. Where the hit lands
   sets the kind of burst: lows throw a **willow** (big, slow, heavy trails that droop to the floor), mids a
@@ -130,7 +106,7 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   on the floor (0 leaves bare stars).
 
 - **Lightning Storm** - each hit strikes the glass floor as a bolt of branching light, where it landed on the line
-  (kicks on the left, snares on the right; the same detector as the Fireworks, so **sensitivity** means the same).
+  (kicks on the left, snares in the middle, hats on the right; the same drum detector as the Fireworks, so **sensitivity** means the same).
   Every bolt is built on the GPU from its own seed by midpoint displacement and drawn as thin glowing lines that are
   anti-aliased analytically: the first stroke runs down the channel in about 20 ms, one to three return strokes
   flicker (a harder hit flickers more), and a dim channel stays behind for a third of a second. Where the hit landed
@@ -143,14 +119,16 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   the branches and sparks); **Motion** is how far the camera wanders, **Flash** is the strokes' brightness and the
   light and thunder ring on the floor (0 leaves only a dim channel).
 
-- **Ripple Pond** - a glossy dark pool that keeps a record of the last few seconds of hits. A hit (the same detector as
+- **Ripple Pond** - a glossy dark pool that keeps a record of the last few seconds of hits. A drum hit (the same detector as
   the Fireworks and the storm) breaks the water at once where it landed on the line, bass at the left, a broad deep
   crater for the lows and a small quick one for the highs, and throws a few droplets in arcs; each droplet that comes
   back down drops a ring where it lands (a harder hit throws more of them). The surface is a damped wave equation on a
   grid of cells 1/20 of a unit wide, stepped at 240 Hz by a fragment pass per step, with a sponge around its edge so
   rings leave instead of coming back, so rings cross and interfere and the pool is a living picture of what was
-  just played. The water is a mirror: it shows a faint haze along the horizon and four light towers standing beyond the
-  far shore, which burn with the bands (bass at the left, highs at the right) and flare on onsets, so every passing
+  just played. Splashes are broader and deeper, and the pond accepts softer drum hits for more frequent rings.
+  The water is a mirror: it shows a faint haze along the horizon and eleven light poles beyond the far shore,
+  one per EQ band (bass at the left, highs at the right). Each lights from the bottom up to its band’s level,
+  using the same rise and fall as the 3D columns, and flares on onsets, so every passing
   ring bends their reflections and sweeps highlights over the pool; the droplets are mirrored too, bent by the ripples
   under them. The slope the water is shaded from is mipmapped and read anisotropically, so a thin ring far away is
   averaged over the pixel's footprint instead of aliasing. In silence the rings damp out quickly and leave calm glass with slowly drifting reflections. Display
@@ -158,6 +136,35 @@ Needs Rust (rustup) and a Vulkan-capable GPU. It holds 120 fps at 5120x1440 on a
   is a quick clean pond, long a surface crowded with hits); **Motion** is how far the towers drift and the camera
   wanders (0 holds the reflections still; the water still follows the music), **Flash** is the towers' flares and the
   droplets' glow.
+
+**Drum detection.** The Sparks, Fireworks, Lightning Storm and Ripple Pond react to *drum hits*, not to levels at
+frequencies. `src/drums.rs` runs in the analyzer thread on the same 1024-point spectrum as the onset envelopes, one
+frame every 10 ms: sixteen frequency bands described by their level against a slow average over the last four frames,
+how many of their bins rose at once and a median of the rise across neighbouring frequencies (a drum lifts a whole
+stretch of the spectrum, a note only its harmonics), and a loudness follower that makes it work at any volume. Five
+small neural networks (one hidden layer of 48 units each, weights in `src/drum_model.bin`) are averaged into three
+probabilities: **low** (kick, tom), **snare** (snare, clap, rim) and **high** (hat, cymbal); a picker reports each
+hit once, about 20 ms after the drum, with a place on the frequency line, a strength and a confidence. The scenes see
+hits whose confidence is at least 0.9 at Sensitivity 1 (0.76 for the more responsive Ripple Pond); the Display menu's **sensitivity** lowers or raises that (down
+to 0.7) and the fountain still uses it as its rise threshold. The networks are trained on audio rendered from the system's
+General MIDI soundfont with known drum times (randomized kits, tempos, instruments, mixes, noise, distortion, speech and
+volumes; `src/corpus.rs`, `src/drum_train.rs`). On held-out songs it finds about three quarters of the kicks, snares and hats
+and 97% of cymbals with 96% precision, against 31% recall for the rise detector it replaced; it still misses most toms,
+click-less sub-bass kicks and fast double-bass, and fires a few times a minute on music without drums. It has not been
+measured on real recorded drums (see `gpu/VISUALIZATION_PLAN.md`, Milestone 11, for the numbers and the gaps). Commands:
+
+    cargo test --release dump_corpus -- --ignored --nocapture       # writes the labelled test songs as WAVs
+    cargo test --release train_drums -- --ignored --nocapture       # retrains (about 12 min); GEQ_WRITE_MODEL=1 installs
+    cargo test --release eval_builtin -- --ignored --nocapture      # scores the built-in model against the old detector
+    GEQ_REAL_RAW=clip.raw cargo test --release real_music -- --ignored --nocapture   # a capture: hits, rhythm, onset image
+    # clip.raw: parec --device=@DEFAULT_MONITOR@ --format=float32le --rate=48000 --channels=2 > clip.raw
+
+**Labelling real songs.** To measure the drum detector on real drums, `gpu/tools/labeler.html` (a single page, open it in a
+browser) shows a recording as an *onset image* (a drum is a vertical bar), plays it at reduced speed and lets you tap each
+drum type along with it; taps are corrected for your latency and snapped to the sharpest onset of that drum's frequency band, so
+the labels carry the sound's timing, not your finger's. It can also show what the detector heard, for review. Capture with
+`gpu/tools/capture-song.sh`, then `cargo test --release propose_labels` / `eval_real` (`-- --ignored --nocapture`); labels live
+in `gpu/labels/` (the audio is not committed). See `gpu/labels/README.md`.
 
 **Controls.** `F`/`F11` full screen, `Esc` leaves, `Left`/`Right` change scene, `1`-`9` pick a preset
 (your favorites, else the whole catalog), `L` opens the look browser. In full screen a compact strip
@@ -174,10 +181,10 @@ audio: no EQ engine, no routing changes, settings are read-only.
     GEQ_SYNTH=impulse|percussion|tones|sweep|dense|stereo|phase|quiet|silence cargo run --release
     GEQ_REPLAY=clip.wav cargo run --release      # loop a WAV file (PCM or float, any rate)
 
-    # a deterministic 6 s screenshot of the tunnel at 32:9, without going full screen
-    GEQ_SYNTH=1 GEQ_SETTINGS=default GEQ_SCENE=2 GEQ_BARE=1 GEQ_SIZE=2560x720 GEQ_SHOT=/tmp/t.png,6 cargo run --release
+    # a deterministic 6 s screenshot of the waterfall at 32:9, without going full screen
+    GEQ_SYNTH=1 GEQ_SETTINGS=default GEQ_SCENE=1 GEQ_BARE=1 GEQ_SIZE=2560x720 GEQ_SHOT=/tmp/t.png,6 cargo run --release
     # frame-time statistics and per-pass GPU time at 5120x1440
-    GEQ_SYNTH=1 GEQ_SCENE=2 GEQ_FPS=1 GEQ_GPUTIME=1 GEQ_FULLSCREEN=1 cargo run --release
+    GEQ_SYNTH=1 GEQ_SCENE=1 GEQ_FPS=1 GEQ_GPUTIME=1 GEQ_FULLSCREEN=1 cargo run --release
 
 A windowless check of any scene on the real GPU (no window, so it works with the monitor off; a synthetic signal, so it
 measures the scene's own cost, not frame pacing) saves the final composite as a PNG and prints the GPU time of each pass:
@@ -189,10 +196,9 @@ measures the scene's own cost, not frame pacing) saves the final composite as a 
 `GEQ_PRESET`, `GEQ_THEME`, `GEQ_BLOOM`, `GEQ_MOTION`, `GEQ_FLASH`, `GEQ_STEREO`, `GEQ_ORBIT`,
 `GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor), `GEQ_FWDEBUG=1` (one line per firework hit and burst: its time, kind, strength and where it came from), `GEQ_LTDEBUG=1` (one line per lightning strike: its time, place, strength, strokes and branches), `GEQ_RPDEBUG=1` (one line per pond impulse: a crater or a landing), `GEQ_RIPPLE_LIFE=n` (how long a ripple lives, 0.4-2.5),
 `GEQ_GRADIENT=n` (fountain spark sensitivity), `GEQ_DENSITY=n` (fountain particle density), `GEQ_SPARKS=0` (columns without sparks),
-`GEQ_SMOKE_ITERS=n` (pressure iterations of the smoke solver, default 18; it changes how tall the plumes stand),
-`GEQ_GRAINS=n` (how much sand lies on the Chladni plates, 0.25-1.5), `GEQ_SPIKES=n` (spike height of the ferrofluid orb, 0.3-1.5),
-`GEQ_CURTAINS=n` (most curtains of the aurora, 2-6), `GEQ_AURORA_SCALE=n` (the aurora's render scale, 0.25-1; default 0.5), `GEQ_SANDDEBUG=1` (once a second: which bands vibrate each plate),
-`GEQ_CYCLE=secs` (auto-cycle scenes), `GEQ_LATENCY=1` (onset delivery delay), `GEQ_BROWSER=1`,
+`GEQ_SPIKES=n` (spike height of the ferrofluid orb, 0.3-1.5),
+`GEQ_CURTAINS=n` (most curtains of the aurora, 2-6), `GEQ_AURORA_SCALE=n` (the aurora's render scale, 0.25-1; default 0.5),
+`GEQ_CYCLE=secs` (auto-cycle scenes), `GEQ_LATENCY=1` (onset and drum-hit delivery delay: one line per drum hit with its kind, confidence and strength), `GEQ_BROWSER=1`,
 `GEQ_VIEW=scene|bloom|nan` (composite debug views). `tools/make-thumbs.sh` regenerates the look
 thumbnails from real captures. `cargo test` covers the synthetic source, onset detection, and the
 modulation layer; `cargo test -- --ignored live_capture` smoke-tests the live `parec` path.

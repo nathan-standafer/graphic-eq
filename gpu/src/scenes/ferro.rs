@@ -6,6 +6,8 @@ use crate::analyzer::CURVE_POINTS;
 /// frequency of the waterfall's spectrum, so a rising sweep climbs the orb; each is a spring that the spectrum
 /// pulls up to its level and a hit throws out and lets settle. Eleven lobes, one per EQ band, are softer
 /// springs that bulge with their band's level and wobble on onsets. Sustained bass makes the whole orb breathe.
+/// Each floor LED also anchors a tapered spike whose height follows that EQ band's displayed level, with
+/// the same attack and fall as the 3D columns, and a reflection in the polished floor.
 ///
 /// A small offscreen pass (`ferro_height.wgsl`) turns the springs into a height map and its gradient, and the
 /// mesh (`ferro.wgsl`) is displaced by it: rasterised geometry, no ray marching. The springs, the lobes and the
@@ -15,6 +17,8 @@ pub struct Ferrofluid {
     orb: wgpu::RenderPipeline,
     refl: wgpu::RenderPipeline,
     floor: wgpu::RenderPipeline,
+    floor_spikes: wgpu::RenderPipeline,
+    floor_spikes_refl: wgpu::RenderPipeline,
     ubuf: wgpu::Buffer,
     bg_height: wgpu::BindGroup,
     bg_draw: wgpu::BindGroup,
@@ -45,6 +49,8 @@ const MESH: [u32; 2] = [384, 192];
 const ORB_VERTS: u32 = MESH[0] * MESH[1] * 6;
 /// The mirror image uses every second vertex of the mesh.
 const REFL_VERTS: u32 = MESH[0] / 2 * (MESH[1] / 2) * 6;
+/// Matches FLOOR_SPIKE_SIDES and FLOOR_SPIKE_ROWS in ferro.wgsl.
+const FLOOR_SPIKE_VERTS: u32 = 32 * 24 * 6;
 
 /// The sphere's radius and the height of its centre over the floor, in world units, and the radius of the ring of
 /// LEDs it floats over.
@@ -201,7 +207,7 @@ impl Body {
         for k in 0..LOBES {
             let idle = 0.012 * motion * (0.31 * self.clock + 2.17 * k as f32).sin();
             lobe_target[k] = LOBE_MAX * gate * ((p.levels[k] - mean) * 1.8).clamp(-1.0, 1.0) + idle;
-            lobe_force[k] = LOBE_KICK * m * super::smoke::onset_for(k, &p.fx) * gate;
+            lobe_force[k] = LOBE_KICK * m * onset_for(k, &p.fx) * gate;
         }
         let breath_target = BREATH_MAX * m * p.sus[0].clamp(0.0, 1.2);
         let hop_target = 0.025 * m * (0.55 * self.clock).sin();
@@ -353,6 +359,8 @@ impl Ferrofluid {
             orb: ctx.pipeline_cull(&draw_layout, &draw_sh, "ferro_orb", "vs_orb", "fs_orb", Pipe::OPAQUE, Some(wgpu::Face::Back)),
             refl: ctx.pipeline_cull(&draw_layout, &draw_sh, "ferro_refl", "vs_orb_refl", "fs_orb_refl", mirror, Some(wgpu::Face::Front)),
             floor: ctx.pipeline_with(&draw_layout, &draw_sh, "ferro_floor", "vs_floor", "fs_floor", floor),
+            floor_spikes: ctx.pipeline_cull(&draw_layout, &draw_sh, "ferro_floor_spikes", "vs_floor_spike", "fs_floor_spike", Pipe::OPAQUE, Some(wgpu::Face::Back)),
+            floor_spikes_refl: ctx.pipeline_cull(&draw_layout, &draw_sh, "ferro_floor_spikes_refl", "vs_floor_spike_refl", "fs_floor_spike_refl", mirror, Some(wgpu::Face::Front)),
             ubuf,
             bg_height,
             bg_draw,
@@ -407,13 +415,17 @@ impl Scene for Ferrofluid {
 
     fn draw(&self, pass: &mut wgpu::RenderPass<'_>, _f: &Frame) {
         pass.set_bind_group(1, &self.bg_draw, &[]);
-        // the opaque orb first: the depth test then skips the floor and the mirror image behind it
+        // Opaque fluid first: the depth test hides the floor and reflections behind the orb and spikes.
         pass.set_pipeline(&self.orb);
         pass.draw(0..ORB_VERTS, 0..1);
+        pass.set_pipeline(&self.floor_spikes);
+        pass.draw(0..FLOOR_SPIKE_VERTS, 0..11);
         pass.set_pipeline(&self.floor);
         pass.draw(0..6, 0..1);
         pass.set_pipeline(&self.refl);
         pass.draw(0..REFL_VERTS, 0..1);
+        pass.set_pipeline(&self.floor_spikes_refl);
+        pass.draw(0..FLOOR_SPIKE_VERTS, 0..11);
     }
 
     fn camera(&self, aspect: f32, p: &SceneParams) -> (Mat4, Vec3) {
@@ -428,6 +440,16 @@ impl Scene for Ferrofluid {
         self.last_frame = 0;
     }
 }
+
+/// The onset envelope that reaches band `i`: the low envelope for the bass bands, the mid one in the
+/// middle and the high one at the top, blended over the seams.
+fn onset_for(i: usize, fx: &[f32; 4]) -> f32 {
+    let i = i as f32;
+    let lo = 1.0 - ((i - 2.0) / 2.0).clamp(0.0, 1.0);
+    let hi = ((i - 6.0) / 2.0).clamp(0.0, 1.0);
+    lo * fx[0] + (1.0 - lo - hi).max(0.0) * fx[1] + hi * fx[2]
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -1,12 +1,13 @@
 // Ripple Pond's drawing: a dark glossy pool shaded from the slope texture the wave simulation leaves (see
-// ripple_sim.wgsl), a haze at the horizon, four light towers standing beyond the far shore, and the droplets in
+// ripple_sim.wgsl), a haze at the horizon, eleven light poles standing beyond the far shore, and the droplets in
 // flight. The water is a mirror: what it shows is the horizon haze and the towers, so a passing ring tilts the
-// surface and sweeps their reflections across it, and the towers' brightness follows the bands. Droplets are the
+// surface and sweeps their reflections across it, and each pole lights from its base up to its EQ band's level. Droplets are the
 // CPU's closed-form arcs (`ripple.rs` keeps the table and knows where each is at any moment), drawn as streaks
 // and mirrored in the water, displaced by the slope under them.
 const FLOOR_EXTENT: f32 = 600.0;
-const TOWERS: u32 = 4u;
-const TOWER_Z: f32 = -25.0;
+const TOWERS: u32 = 11u;
+const TOWER_MAX_H: f32 = 8.0;
+const TOWER_Z: f32 = -18.75; // 25% closer to the ripple source line at z = 0
 const SKY_Z: f32 = -70.0;
 
 @group(1) @binding(2) var<uniform> r: RpU;
@@ -22,33 +23,28 @@ fn horizon(el: f32) -> vec3<f32> {
   return palette(0.35, 0.2) * (0.004 + 0.050 * exp(-max(el, 0.0) * 30.0)) * (0.7 + 0.5 * u.sus.w);
 }
 
-// ---- the towers: a skyline of four strips of light. Bass stands at the left, the highs at the right; each burns
-// with its region's sustained level and flares on its onsets, and all stay lit in silence and drift very slowly.
+// ---- eleven poles, one per EQ band. The lit height uses the same displayed level as the 3D columns.
+// The whole row drifts together, keeping bass-to-treble order and even spacing.
 fn tower_x(k: u32) -> f32 {
-  var f = array<f32, 4>(-0.30, -0.10, 0.12, 0.32);
-  let drift = sin(u.t * (0.045 + 0.011 * f32(k)) + 1.7 * f32(k)) * 0.035 * u.ctl.x;
-  return (f[k] + drift) * r.pond.z;
+  let drift = sin(u.t * 0.045) * 0.015 * u.ctl.x;
+  return (mix(-0.36, 0.36, f32(k) / 10.0) + drift) * r.pond.z;
 }
-fn tower_hw(k: u32) -> f32 {
-  var a = array<f32, 4>(0.42, 0.30, 0.34, 0.26);
-  return a[k];
+fn tower_hw(_k: u32) -> f32 {
+  return 0.20;
 }
 fn tower_h(k: u32) -> f32 {
-  var a = array<f32, 4>(7.0, 5.2, 6.0, 8.0);
-  return a[k];
+  return clamp(lvl(k), 0.0, 1.0) * TOWER_MAX_H;
 }
 fn tower_role(k: u32) -> u32 {
-  var a = array<u32, 4>(0u, 1u, 1u, 2u);
-  return a[k];
+  if (k < 3u) { return 0u; }
+  if (k < 7u) { return 1u; }
+  return 2u;
 }
 fn tower_gain(k: u32) -> f32 {
-  let role = tower_role(k);
-  return (0.40 + 0.80 * u.sus[role] + 0.8 * u.flash * u.fx[role]) * (0.85 + 0.30 * u.sus.w);
+  return 0.8 + 0.8 * u.flash * u.fx[tower_role(k)];
 }
 fn tower_tint(k: u32) -> vec3<f32> {
-  var t = array<f32, 4>(0.0, 0.6, 0.6, 1.0);
-  var x = array<f32, 4>(0.1, 0.4, 0.6, 0.9);
-  return mix(palette(t[k], x[k]), vec3<f32>(1.0), 0.22);
+  return mix(palette(clamp(lvl(k) * 0.85, 0.0, 1.0), f32(k) / 10.0), vec3<f32>(1.0), 0.16);
 }
 
 struct TowerOut {
@@ -63,7 +59,7 @@ struct TowerOut {
     vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
   let c = q[vi];
   let hw = tower_hw(ii);
-  let h = tower_h(ii);
+  let h = TOWER_MAX_H;
   let dx = mix(-2.4 * hw, 2.4 * hw, c.x);
   let y = mix(0.0, h + 1.0, c.y);
   var o: TowerOut;
@@ -76,10 +72,16 @@ struct TowerOut {
 @fragment fn fs_tower(in: TowerOut) -> @location(0) vec4<f32> {
   let h = tower_h(in.k);
   let dx = abs(in.uv.x);
-  let core = (1.0 - smoothstep(0.80, 1.0, dx)) * (1.0 - smoothstep(h - 0.8, h, in.uv.y)) * (0.65 + 0.35 * (1.0 - in.uv.y / h));
-  // the glow dies away before the quad's edges and top, so the strip has no visible box around it
-  let halo = exp(-0.5 * dx * dx) * 0.10 * (1.0 - smoothstep(1.2, 2.4, dx)) * (1.0 - smoothstep(h - 0.6, h + 1.0, in.uv.y));
-  return vec4<f32>(tower_tint(in.k) * tower_gain(in.k) * (1.8 * core + halo) * u.exposure, 1.0);
+  let aa = max(fwidth(in.uv.y), 0.025);
+  let lit = (1.0 - smoothstep(h - aa, h + aa, in.uv.y)) * smoothstep(0.0, 0.04, h);
+  let side = 1.0 - smoothstep(0.80, 1.0, dx);
+  let body = side * (1.0 - smoothstep(TOWER_MAX_H - 0.08, TOWER_MAX_H, in.uv.y));
+  // Dim housings remain visible above the light, like the columns' unlit strips.
+  let core = side * lit;
+  let halo = exp(-0.5 * dx * dx) * 0.10 * (1.0 - smoothstep(1.2, 2.4, dx))
+    * (1.0 - smoothstep(h, h + 0.4, in.uv.y)) * smoothstep(0.0, 0.10, h);
+  let c = vec3<f32>(0.018, 0.023, 0.032) * body + tower_tint(in.k) * tower_gain(in.k) * (1.8 * core + halo);
+  return vec4<f32>(c * u.exposure, 1.0);
 }
 
 // The water's own body: a soft sheen on the faces of the ripples turned toward the towers, so a ring shows wherever it
@@ -129,7 +131,7 @@ struct FloorOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> 
   // the slope texture is mipmapped and read anisotropically, so a thin ring far away is averaged over the pixel's
   // footprint instead of aliasing as it moves
   let s = textureSample(slope, wsmp, pond_uv(in.wp));
-  let n = normalize(vec3<f32>(-s.x, 1.0, -s.y));
+  let n = normalize(vec3<f32>(-s.x * 1.5, 1.0, -s.y * 1.5));
   var rr = reflect(-v, n);
   rr = normalize(vec3<f32>(rr.x, max(rr.y, 0.02), rr.z));
   let foot = length(fwidth(rr)) * 0.8 + 0.004;
@@ -139,6 +141,7 @@ struct FloorOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> 
   var refl = horizon(rr.y);
   for (var k = 0u; k < TOWERS; k++) {
     let h = tower_h(k);
+    if (h <= 0.001) { continue; }
     let m = rect_light_at(vec3<f32>(tower_x(k), 0.5 * h, TOWER_Z), vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), tower_hw(k), 0.5 * h, in.wp, rr, foot, 0.04);
     refl += tower_tint(k) * (1.8 * tower_gain(k)) * m.x * (0.45 + 0.55 * (1.0 - clamp((m.z + 0.5 * h) / h, 0.0, 1.0)));
   }

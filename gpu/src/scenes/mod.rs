@@ -3,6 +3,7 @@
 //! targets, transitions, bloom and tone mapping, so scenes only describe what to draw.
 
 use crate::analyzer::CURVE_POINTS;
+use crate::drums::DrumHit;
 use crate::render::{HIST_W, SCENE_FMT};
 use bytemuck::{Pod, Zeroable};
 use eframe::wgpu;
@@ -17,27 +18,21 @@ pub mod fountain;
 pub mod lightning;
 pub mod particles;
 pub mod ripple;
-pub mod sand;
-pub mod smoke;
 pub mod sparks;
-pub mod tunnel;
-pub mod vectorscope;
 pub mod waterfall;
 
 /// Stable scene IDs; they are persisted in the settings file.
 pub const COLUMNS: u32 = 0;
 pub const WATERFALL: u32 = 1;
-pub const TUNNEL: u32 = 2;
-pub const VECTORSCOPE: u32 = 3;
 pub const FOUNTAIN: u32 = 4;
-pub const SMOKE: u32 = 5;
-pub const CHLADNI: u32 = 6;
 pub const FERROFLUID: u32 = 7;
 pub const AURORA: u32 = 8;
 pub const FIREWORKS: u32 = 9;
 pub const LIGHTNING: u32 = 10;
 pub const RIPPLE: u32 = 11;
-pub const ALL: [u32; 12] = [COLUMNS, WATERFALL, TUNNEL, VECTORSCOPE, FOUNTAIN, SMOKE, CHLADNI, FERROFLUID, AURORA, FIREWORKS, LIGHTNING, RIPPLE];
+pub const ALL: [u32; 8] = [COLUMNS, WATERFALL, FOUNTAIN, FERROFLUID, AURORA, FIREWORKS, LIGHTNING, RIPPLE];
+/// Storage indexed by stable scene ID, including retired IDs 2, 3, 5 and 6.
+pub const ID_SLOTS: usize = RIPPLE as usize + 1;
 
 pub const DEPTH_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const MSAA: u32 = 4;
@@ -97,6 +92,9 @@ impl Default for CamState {
     }
 }
 
+/// The most drum hits a frame carries (more than the detector can report in 10 ms at any kind).
+pub const MAX_DRUMS: usize = 8;
+
 /// Everything one scene needs to draw one frame.
 #[derive(Clone)]
 pub struct SceneParams {
@@ -116,23 +114,19 @@ pub struct SceneParams {
     pub cam: CamState,
     /// Fraction (0..1) of the way to the next history row.
     pub row_frac: f32,
-    /// Phosphor persistence in seconds (the vectorscope's afterglow).
-    pub persist: f32,
     /// Sparks overlay on the 3D columns.
     pub sparks: bool,
     /// Particle density multiplier (fountain emission, a quality setting).
     pub density: f32,
     /// How steeply a frequency's volume must rise to throw a spark (the fountain's sensitivity, 1 = designed).
     pub gradient: f32,
-    /// Per column: how far its peak cap rose this frame in a burst-worthy push (0 = no burst).
+    /// Per column: how big a burst of sparks the drum hits of this frame throw from it, as a share of the LED
+    /// strip's height (0 = no burst; `modulation::column_pushes`).
     pub peak_hits: [f32; 11],
-    /// How thick the smoke jets blow (1 = designed).
-    pub smoke: f32,
-    /// Where each EQ band's slider stands across the scene, as a fraction of its width (the smoke nozzles
-    /// stand over them in windowed mode).
-    pub nozzle_x: [f32; 11],
-    /// How much sand lies on the Chladni plates (1 = designed).
-    pub grains: f32,
+    /// The drum hits the detector found since the last frame (`drums.rs`), oldest first; `n_drums` of them are
+    /// set. At most eight a frame: a quiet frame has none.
+    pub drums: [DrumHit; MAX_DRUMS],
+    pub n_drums: usize,
     /// How tall the ferrofluid orb's spikes stand (1 = designed).
     pub spikes: f32,
     /// Most curtains the aurora may show (the picture's shape can allow fewer).
@@ -143,6 +137,13 @@ pub struct SceneParams {
     /// rising now, relative to the music's own hardest recent hits (about 1 at those).
     pub spectrum: [f32; CURVE_POINTS],
     pub rise: [f32; CURVE_POINTS],
+}
+
+impl SceneParams {
+    /// This frame's drum hits.
+    pub fn drums(&self) -> &[DrumHit] {
+        &self.drums[..self.n_drums.min(MAX_DRUMS)]
+    }
 }
 
 #[cfg(test)]
@@ -164,14 +165,12 @@ impl SceneParams {
             rings: [[0.0; 4]; 8],
             cam: CamState::default(),
             row_frac: 0.0,
-            persist: 0.25,
             sparks: true,
             density: 1.0,
             gradient: 1.0,
             peak_hits: [0.0; 11],
-            smoke: 1.0,
-            nozzle_x: std::array::from_fn(|i| (i as f32 + 0.5) / 11.0),
-            grains: 1.0,
+            drums: [DrumHit::default(); MAX_DRUMS],
+            n_drums: 0,
             spikes: 1.0,
             curtains: 6,
             ripple_life: 1.0,
@@ -182,19 +181,16 @@ impl SceneParams {
 }
 
 /// What `update` and `draw` see besides the pipeline state: the frame's parameters and target size.
-#[allow(dead_code)] // some fields are only for scenes that run offscreen work (persistence, simulation)
+#[allow(dead_code)] // some fields are only for scenes that run offscreen work (simulation)
 pub struct Frame<'a> {
     pub p: &'a SceneParams,
     pub size: [u32; 2],
     pub aspect: f32,
-    /// Stereo samples (left, right) that arrived since the previous frame, oldest first. Each sample
-    /// is delivered once, so a scene that is not drawn simply misses them.
-    pub wave: &'a [[f32; 2]],
     /// This draw's uniform bind group (group 0), for scenes that run their own passes in `update`.
     pub bg: &'a wgpu::BindGroup,
     /// Like `ts`, for a scene whose `update` is a compute pass.
     pub ts_compute: Option<wgpu::ComputePassTimestampWrites<'a>>,
-    /// Counts frames; a scene that sees it skip knows it missed some of `wave`. A scene drawn twice in
+    /// Counts frames; a scene that sees it skip knows its simulation missed updates. A scene drawn twice in
     /// one frame (a crossfade between two looks of it) sees the same number both times.
     pub frame_no: u64,
     /// GPU timing for the scene's update pass (only with `GEQ_GPUTIME`, and only for scenes that say
@@ -217,18 +213,12 @@ pub enum Control {
     PeakCaps,
     WaterfallChannels,
     WaterfallDetail,
-    /// Phosphor afterglow time of the vectorscope.
-    ScopePersistence,
     /// Embers and sparks over the 3D columns.
     Sparks,
     /// How many particles the fountain launches (and stars in a firework, branches and sparks in a strike, droplets in a splash).
     Density,
     /// How steeply the volume must rise to throw sparks (and to detonate a shell).
     Gradient,
-    /// How thick the smoke jets blow.
-    SmokeThickness,
-    /// How much sand lies on the Chladni plates.
-    SandGrains,
     /// How tall the ferrofluid orb's spikes stand.
     OrbSpikes,
     /// How many curtains the aurora shows.
@@ -247,7 +237,7 @@ pub struct SceneInfo {
     pub cost_ms: f32,
 }
 
-const INFOS: [SceneInfo; 12] = [
+const INFOS: [SceneInfo; ALL.len()] = [
     SceneInfo {
         id: COLUMNS,
         name: "3D columns",
@@ -263,42 +253,11 @@ const INFOS: [SceneInfo; 12] = [
         cost_ms: 3.6,
     },
     SceneInfo {
-        id: TUNNEL,
-        name: "Spectrum Tunnel",
-        cam: CamLimits { yaw: 0.5, pitch: (-0.35, 0.35), zoom: (0.6, 1.6) },
-        controls: &[],
-        cost_ms: 2.7,
-    },
-    SceneInfo {
-        id: VECTORSCOPE,
-        name: "Vectorscope",
-        // a flat instrument: the camera does not move
-        cam: CamLimits { yaw: 0.0, pitch: (0.0, 0.0), zoom: (1.0, 1.0) },
-        controls: &[Control::ScopePersistence],
-        cost_ms: 1.0,
-    },
-    SceneInfo {
         id: FOUNTAIN,
         name: "Fountain",
         cam: CamLimits { yaw: f32::INFINITY, pitch: (-1.5, 1.5), zoom: (0.35, 3.0) },
         controls: &[Control::Gradient, Control::Density],
         cost_ms: 0.8,
-    },
-    SceneInfo {
-        id: SMOKE,
-        name: "Smoke Jets",
-        // a flat picture: the camera does not move
-        cam: CamLimits { yaw: 0.0, pitch: (0.0, 0.0), zoom: (1.0, 1.0) },
-        controls: &[Control::SmokeThickness],
-        cost_ms: 1.8,
-    },
-    SceneInfo {
-        id: CHLADNI,
-        name: "Chladni Sand",
-        // a flat picture: the camera does not move
-        cam: CamLimits { yaw: 0.0, pitch: (0.0, 0.0), zoom: (1.0, 1.0) },
-        controls: &[Control::SandGrains],
-        cost_ms: 1.9,
     },
     SceneInfo {
         id: FERROFLUID,
@@ -345,7 +304,7 @@ pub fn info(id: u32) -> &'static SceneInfo {
 // ----------------------------------------------------------------------- scene interface
 
 pub trait Scene: Send + Sync {
-    /// Offscreen work before the main pass: simulation steps, compute, persistence.
+    /// Offscreen work before the main pass: simulation steps, compute.
     fn update(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue, _enc: &mut wgpu::CommandEncoder, _f: &Frame) {}
     /// Whether `update` runs a pass worth timing this frame (it gets `Frame::ts` or `Frame::ts_compute`).
     fn uses_update(&self, _p: &SceneParams) -> bool {
@@ -444,11 +403,7 @@ impl<'a> Ctx<'a> {
 fn create(id: u32, ctx: &Ctx) -> Box<dyn Scene> {
     match id {
         WATERFALL => Box::new(waterfall::Waterfall::new(ctx)),
-        TUNNEL => Box::new(tunnel::Tunnel::new(ctx)),
-        VECTORSCOPE => Box::new(vectorscope::Vectorscope::new(ctx)),
         FOUNTAIN => Box::new(fountain::Fountain::new(ctx)),
-        SMOKE => Box::new(smoke::Smoke::new(ctx)),
-        CHLADNI => Box::new(sand::Sand::new(ctx)),
         FERROFLUID => Box::new(ferro::Ferrofluid::new(ctx)),
         AURORA => Box::new(aurora::Aurora::new(ctx)),
         FIREWORKS => Box::new(fireworks::Fireworks::new(ctx)),

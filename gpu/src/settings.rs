@@ -24,7 +24,7 @@ pub struct Settings {
     pub gains: [f32; 11],
     pub preset: String,
     pub eq_on: bool,
-    pub scene: u32,       // 0 columns, 1 waterfall, 2 tunnel, 3 vectorscope, 4 fountain, 5 smoke jets, 6 chladni sand, 7 ferrofluid orb, 8 aurora, 9 fireworks, 10 lightning storm, 11 ripple pond (stable IDs)
+    pub scene: u32,       // Stable ID from scenes; retired IDs fall back to columns at startup.
     pub theme: u32,       // 0 classic, 1 amber, 2 ice, 3 neon, 4 rainbow
     pub range: f32,       // dB below full scale shown
     pub sensitivity: f32, // dB added to what is drawn
@@ -39,12 +39,9 @@ pub struct Settings {
     pub flash: f32,       // onset accents and flashes, 0 = none
     #[serde(deserialize_with = "looks_compat")]
     pub look: [u32; SCENES], // selected visual preset per scene
-    pub persistence: f32, // vectorscope phosphor afterglow, seconds
     pub sparks: bool,     // columns: embers and sparks over the columns
     pub density: f32,     // fountain particle density (1 = the designed amount)
     pub spark_sensitivity: f32, // fountain: how close to the music's hardest hits a rise must get to throw sparks (1 = designed)
-    pub smoke_density: f32, // smoke jets: how thick the smoke blows (1 = designed)
-    pub sand_grains: f32, // chladni sand: how much sand lies on the plates (1 = designed)
     pub orb_spikes: f32,  // ferrofluid orb: how tall the spikes stand (1 = designed)
     pub aurora_curtains: u32, // aurora: most curtains shown (the picture's shape may allow fewer)
     pub ripple_life: f32, // ripple pond: how long a ripple lives (1 = designed)
@@ -55,8 +52,8 @@ pub struct Settings {
     pub cycle_secs: f32,
 }
 
-/// Scenes with their own saved look. Older settings files hold fewer; the new ones take their first look.
-pub const SCENES: usize = crate::scenes::ALL.len();
+/// Saved looks indexed by stable scene ID. Keep retired slots so later scenes retain their looks.
+pub const SCENES: usize = crate::scenes::ID_SLOTS;
 
 fn looks_compat<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u32; SCENES], D::Error> {
     let v = Vec::<u32>::deserialize(d)?;
@@ -87,12 +84,9 @@ impl Default for Settings {
             motion: 0.7,
             flash: 0.8,
             look: [0; SCENES],
-            persistence: 0.25,
             sparks: true,
             density: 1.0,
             spark_sensitivity: 1.0,
-            smoke_density: 1.0,
-            sand_grains: 1.0,
             orb_spikes: 1.0,
             aurora_curtains: 6,
             ripple_life: 1.0,
@@ -153,12 +147,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retired_scenes_fall_back_without_shifting_saved_looks() {
+        for scene in [2, 3, 5, 6, 99] {
+            let s: Settings = serde_json::from_value(serde_json::json!({
+                "scene": scene,
+                "look": [0, 1, 2, 3, 1, 2, 3, 2, 1, 3, 2, 1],
+                "persistence": 0.5,
+                "smoke_density": 1.5,
+                "sand_grains": 0.5
+            })).unwrap();
+            assert_eq!(crate::scenes::info(s.scene).id, crate::scenes::COLUMNS);
+            assert_eq!(s.look[crate::scenes::FERROFLUID as usize], 2);
+            assert_eq!(s.look[crate::scenes::AURORA as usize], 1);
+            assert_eq!(s.look[crate::scenes::FIREWORKS as usize], 3);
+            assert_eq!(s.look[crate::scenes::LIGHTNING as usize], 2);
+            assert_eq!(s.look[crate::scenes::RIPPLE as usize], 1);
+        }
+        for scene in crate::scenes::ALL {
+            assert!((scene as usize) < SCENES);
+            assert_eq!(crate::scenes::info(scene).id, scene);
+            assert_eq!(crate::presets::get(scene, 0).scene, scene);
+        }
+    }
+
+    #[test]
     fn old_settings_with_fewer_looks_still_load() {
         let s: Settings = serde_json::from_str(r#"{"scene": 2, "look": [1, 2, 3], "bloom": 1.2}"#).unwrap();
         assert_eq!(s.look, [1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(s.scene, 2);
         assert!((s.bloom - 1.2).abs() < 1e-6);
-        assert!((s.persistence - 0.25).abs() < 1e-6, "new fields take their defaults");
         assert!(s.sparks && (s.density - 1.0).abs() < 1e-6);
         // the fountain's sensitivity changed meaning (relative to the music's own hits), so the old key is not read
         let s: Settings = serde_json::from_str(r#"{"gradient": 3.0}"#).unwrap();
@@ -167,7 +184,7 @@ mod tests {
         assert_eq!(s.look, [0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0]);
         let s: Settings = serde_json::from_str(r#"{"look": [0, 1, 2, 3, 4], "sparks": false}"#).unwrap();
         assert_eq!(s.look, [0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0]);
-        assert!((s.smoke_density - 1.0).abs() < 1e-6 && (s.sand_grains - 1.0).abs() < 1e-6 && (s.orb_spikes - 1.0).abs() < 1e-6 && s.aurora_curtains == 6 && (s.ripple_life - 1.0).abs() < 1e-6);
+        assert!((s.orb_spikes - 1.0).abs() < 1e-6 && s.aurora_curtains == 6 && (s.ripple_life - 1.0).abs() < 1e-6);
         assert!(!s.sparks);
     }
 }

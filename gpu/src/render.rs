@@ -58,8 +58,6 @@ pub struct SceneCallback {
     pub size_px: [u32; 2],
     /// New history rows: HIST_W texels of (left, right, mixed, rise) bytes (Rgba8).
     pub rows: Vec<Vec<u8>>,
-    /// Stereo samples since the previous frame, oldest first.
-    pub wave: Vec<[f32; 2]>,
 }
 
 struct Targets {
@@ -628,7 +626,7 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
             let ts_upd = gpu.timer.as_ref().and_then(|tm| tm.writes(upd_slot));
             let ts_cmp = gpu.timer.as_ref().and_then(|tm| tm.compute_writes(upd_slot));
             let ts = gpu.timer.as_ref().and_then(|tm| tm.writes(main_slot));
-            let frame = Frame { p, size: [w, h], aspect, wave: &self.wave, bg: &slot.bg[k.min(1)], frame_no, ts: ts_upd, ts_compute: ts_cmp };
+            let frame = Frame { p, size: [w, h], aspect, bg: &slot.bg[k.min(1)], frame_no, ts: ts_upd, ts_compute: ts_cmp };
             slot.scene.update(device, queue, encoder, &frame);
 
             let target = if !two { &t.scene_view } else if k == 0 { &t.out_a } else { &t.out_b };
@@ -781,7 +779,17 @@ mod headless {
         }
         p.sus = [0.6 + 0.2 * (0.5 * t).sin(), 0.5, 0.45, 0.5];
         p.fx = [if pos < 0.35 { env } else { 0.0 }, if (0.3..0.7).contains(&pos) { env } else { 0.0 }, if pos > 0.6 { env } else { 0.0 }, 0.0];
-        let _ = scene;
+        // Drum-driven scenes need actual events as well as the spectral rise. Deliver one event per
+        // half second; the first frame after a boundary carries it, just like the analyzer feed.
+        if matches!(scene, scenes::RIPPLE | scenes::FIREWORKS | scenes::LIGHTNING | scenes::COLUMNS) && since < 1.0 / 120.0 {
+            use crate::drums::{DrumHit, Kind};
+            p.drums[0] = DrumHit {
+                t: (k / 2.0) as f64,
+                kind: if pos < 0.35 { Kind::Low } else if pos < 0.75 { Kind::Snare } else { Kind::High },
+                pos, strength: 0.8, p: 0.95,
+            };
+            p.n_drums = 1;
+        }
         p
     }
 
@@ -855,7 +863,6 @@ mod headless {
                 time: t,
                 size_px: [w, h],
                 rows: if f % 2 == 0 { vec![history_row(t)] } else { Vec::new() },
-                wave: Vec::new(),
             };
             let c0 = std::time::Instant::now();
             let mut enc = device.create_command_encoder(&Default::default());

@@ -5,6 +5,7 @@
 
 use crate::bands;
 use crate::clock;
+use crate::drums::{DrumDetector, DrumHit};
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
@@ -114,11 +115,12 @@ fn rise_bins() -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// Cumulative one-sided power spectrum (mean-square contribution per bin).
-fn cumulate(spec: &[Complex<f32>], norm: f32, cum: &mut [f32]) {
+/// Cumulative one-sided power spectrum (mean-square contribution per bin). Keep the sum in f64:
+/// quiet treble bins must not round away after a loud bass bin has raised the running total.
+fn cumulate(spec: &[Complex<f32>], norm: f32, cum: &mut [f64]) {
     cum[0] = 0.0;
     for k in 0..FFT_SIZE / 2 {
-        cum[k + 1] = cum[k] + spec[k].norm_sqr() * norm;
+        cum[k + 1] = cum[k] + f64::from(spec[k].norm_sqr()) * f64::from(norm);
     }
 }
 
@@ -141,9 +143,9 @@ pub struct Dsp {
     spec_l: Vec<Complex<f32>>,
     spec_r: Vec<Complex<f32>>,
     spec_m: Vec<Complex<f32>>,
-    cum_m: Vec<f32>,
-    cum_l: Vec<f32>,
-    cum_r: Vec<f32>,
+    cum_m: Vec<f64>,
+    cum_l: Vec<f64>,
+    cum_r: Vec<f64>,
     small: Vec<Complex<f32>>,
     prev_c: Vec<f32>,
     /// For each waterfall bin, the span of 1024-point FFT bins it listens to for a rise.
@@ -159,6 +161,9 @@ pub struct Dsp {
     seq: u64,
     /// Latest normalized flux per region (diagnostics and tests).
     pub last_x: [f32; 3],
+    /// The drum detector, run on every hop, and the hits it has found since they were last taken.
+    pub drums: DrumDetector,
+    drum_hits: Vec<DrumHit>,
 }
 
 impl Dsp {
@@ -203,6 +208,8 @@ impl Dsp {
             corr: 0.0,
             seq: 0,
             last_x: [0.0; 3],
+            drums: DrumDetector::new(),
+            drum_hits: Vec::new(),
         }
     }
 
@@ -259,8 +266,13 @@ impl Dsp {
         let hop_dt = HOP as f32 / RATE;
         let warm = self.consumed > STARTUP_SAMPLES;
         let mut c = [0f32; FLUX_FFT / 2 + 1];
+        let mut mag = [0f32; FLUX_FFT / 2 + 1];
         for k in 0..=FLUX_FFT / 2 {
-            c[k] = (1.0 + 2000.0 * self.small[k].norm() * scale).ln();
+            mag[k] = self.small[k].norm() * scale;
+            c[k] = (1.0 + 2000.0 * mag[k]).ln();
+        }
+        if warm {
+            self.drums.push(&mag, t, &mut self.drum_hits);
         }
         // how steeply each frequency's level is rising: the positive change of the compressed magnitude since
         // the previous hop, largest over the bins a waterfall bin covers, held with a short fall
@@ -312,6 +324,11 @@ impl Dsp {
         self.prev_c.copy_from_slice(&c);
     }
 
+    /// The drum hits found since the last call.
+    pub fn take_drums(&mut self) -> Vec<DrumHit> {
+        std::mem::take(&mut self.drum_hits)
+    }
+
     /// Band levels and curves from the newest 8192 samples.
     fn spectra(&mut self, t: f64) -> Levels {
         for i in 0..FFT_SIZE {
@@ -329,17 +346,17 @@ impl Dsp {
         cumulate(&self.spec_r, self.norm, &mut self.cum_r);
 
         let bin_hz = self.bin_hz;
-        let energy = |cum: &[f32], f: f32| -> f32 {
-            let pos = f / bin_hz;
+        let energy = |cum: &[f64], f: f32| -> f64 {
+            let pos = f64::from(f) / f64::from(bin_hz);
             let i = pos as usize;
             if i >= FFT_SIZE / 2 {
                 return cum[FFT_SIZE / 2];
             }
-            cum[i] + (pos - i as f32) * (cum[i + 1] - cum[i])
+            cum[i] + (pos - i as f64) * (cum[i + 1] - cum[i])
         };
-        let db = |cum: &[f32], (lo, hi): (f32, f32), scale: f32| -> f32 {
-            let e = (energy(cum, hi) - energy(cum, lo)) * scale;
-            if e > 1e-14 { (10.0 * e.log10() + CAL_DB).max(FLOOR_DB) } else { FLOOR_DB }
+        let db = |cum: &[f64], (lo, hi): (f32, f32), scale: f32| -> f32 {
+            let e = (energy(cum, hi) - energy(cum, lo)) * f64::from(scale);
+            if e > 1e-14 { (10.0 * e.log10() as f32 + CAL_DB).max(FLOOR_DB) } else { FLOOR_DB }
         };
         // Waterfall bins: window width is user-selectable; energy is scaled to what a
         // full band-wide window would collect so levels stay comparable with the bars.
@@ -364,38 +381,27 @@ impl Dsp {
     }
 }
 
-/// Stereo samples waiting for the UI at most this long (about 170 ms); older ones are dropped, so a
-/// stalled UI never makes the queue grow.
-pub const WAVE_CAP: usize = 8192;
-
 /// State shared between an analysis thread and the UI.
 #[derive(Default)]
 pub struct Shared {
     pub levels: Mutex<Levels>,
     pub events: Mutex<Vec<Onset>>,
-    /// Every sample (left, right) exactly once, oldest first, for scenes that draw the waveform.
-    pub wave: Mutex<Vec<[f32; 2]>>,
+    /// Drum hits found by the detector (`drums.rs`), oldest first, until the UI takes them.
+    pub drums: Mutex<Vec<DrumHit>>,
 }
 
 impl Shared {
-    /// Queue new samples for the UI.
-    pub fn push_wave(&self, l: &[f32], r: &[f32]) {
-        let mut q = self.wave.lock().unwrap();
-        q.extend(l.iter().zip(r).map(|(a, b)| [*a, *b]));
-        let n = q.len();
-        if n > WAVE_CAP {
-            q.drain(..n - WAVE_CAP);
-        }
-    }
-
-    /// Everything queued since the last call, swapped out so the lock is held only briefly.
-    pub fn take_wave(&self) -> Vec<[f32; 2]> {
-        std::mem::take(&mut *self.wave.lock().unwrap())
-    }
-
-    pub fn publish(&self, lv: Option<Levels>, ev: Vec<Onset>) {
+    pub fn publish(&self, lv: Option<Levels>, ev: Vec<Onset>, drums: Vec<DrumHit>) {
         if let Some(lv) = lv {
             *self.levels.lock().unwrap() = lv;
+        }
+        if !drums.is_empty() {
+            let mut q = self.drums.lock().unwrap();
+            q.extend(drums);
+            let n = q.len();
+            if n > 64 {
+                q.drain(..n - 64);
+            }
         }
         if !ev.is_empty() {
             let mut q = self.events.lock().unwrap();
@@ -455,9 +461,8 @@ impl Analyzer {
                 if frames == 0 {
                     continue;
                 }
-                sh.push_wave(&l, &r);
                 let (lv, ev) = dsp.push(&l, &r, t);
-                sh.publish(lv, ev);
+                sh.publish(lv, ev, dsp.take_drums());
             }
         });
         Ok(Analyzer { child, shared })
@@ -501,6 +506,32 @@ mod tests {
     }
 
     #[test]
+    fn quiet_treble_survives_a_loud_bass_in_the_same_signal() {
+        // A quiet broadband component must retain its 16 kHz level when a strong bass tone is added.
+        // Accumulating power in f32 can round away every high-frequency bin after the loud bass bins.
+        let n = FFT_SIZE * 2;
+        let mut seed = 7u32;
+        let quiet: Vec<f32> = (0..n).map(|_| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            ((seed >> 8) as f32 / 16777216.0 * 2.0 - 1.0) * 0.0015
+        }).collect();
+        let mixed: Vec<f32> = quiet.iter().enumerate().map(|(i, x)| {
+            x + (0.7 * (std::f64::consts::TAU * 130.0 * i as f64 / RATE as f64).sin()) as f32
+        }).collect();
+        let levels = |samples: &[f32]| {
+            Dsp::new().push(samples, samples, n as f64 / RATE as f64).0.unwrap()
+        };
+        let reference = levels(&quiet);
+        let actual = levels(&mixed);
+        assert!(reference.bands[10] > -75.0, "the treble should be visible at an 80 dB range");
+        assert!((actual.bands[10] - reference.bands[10]).abs() < 0.2,
+            "16 kHz: quiet alone {:.2} dB, with bass {:.2} dB", reference.bands[10], actual.bands[10]);
+        for curve in [&actual.curve, &actual.curve_l, &actual.curve_r] {
+            assert!((curve[180] - reference.curve[180]).abs() < 0.2);
+        }
+    }
+
+    #[test]
     #[ignore]
     fn dump_flux() {
         for fx in [Fixture::Tones, Fixture::Percussion, Fixture::Demo, Fixture::Dense] {
@@ -538,23 +569,6 @@ mod tests {
         assert!(lv.seq > 50, "only {} analysis frames in 2.5 s", lv.seq);
         assert!(lv.t > 0.0);
         eprintln!("live: {} frames, bands[0..3] = {:?} dB, corr {:.2}", lv.seq, &lv.bands[..3], lv.fx[3]);
-    }
-
-    #[test]
-    fn waveform_samples_are_delivered_once_and_the_queue_is_bounded() {
-        let sh = Shared::default();
-        sh.push_wave(&[0.1, 0.2, 0.3], &[-0.1, -0.2, -0.3]);
-        sh.push_wave(&[0.4], &[-0.4]);
-        let got = sh.take_wave();
-        assert_eq!(got, vec![[0.1, -0.1], [0.2, -0.2], [0.3, -0.3], [0.4, -0.4]]);
-        assert!(sh.take_wave().is_empty(), "each sample is handed over once");
-        // a stalled consumer never makes the queue grow without bound; the newest samples survive
-        let n = WAVE_CAP + 1000;
-        let l: Vec<f32> = (0..n).map(|i| i as f32).collect();
-        sh.push_wave(&l, &l);
-        let got = sh.take_wave();
-        assert_eq!(got.len(), WAVE_CAP);
-        assert_eq!(got.last().unwrap()[0], (n - 1) as f32);
     }
 
     /// Run `secs` of a signal made by `signal(sample_index)` through the DSP and return the last `Levels`.
