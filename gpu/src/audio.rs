@@ -24,6 +24,7 @@ pub struct Audio {
     engine: Option<Engine>,
     analyzer: Option<Analyzer>,
     rx: Option<Receiver<(String, Result<Engine, String>)>>,
+    starter: Option<std::thread::JoinHandle<()>>,
     redirect: Option<routing::StreamRedirect>,
     orig_default: Option<String>,
     /// Set when the chosen output was not the system default, so the volume keys follow it; put back on quit.
@@ -32,6 +33,7 @@ pub struct Audio {
     pub ready: bool,
     pub status: String,
     source_pre: bool,
+    analyzing: bool,
     gains: [f32; bands::COUNT],
     last_check: Instant,
     synth: Option<(Fixture, SynthSource)>,
@@ -52,6 +54,7 @@ impl Audio {
             engine: None,
             analyzer: None,
             rx: None,
+            starter: None,
             redirect: None,
             orig_default: current,
             default_changed: false,
@@ -59,6 +62,7 @@ impl Audio {
             ready: false,
             status: String::new(),
             source_pre,
+            analyzing: true,
             gains,
             last_check: Instant::now(),
             synth: None,
@@ -110,6 +114,7 @@ impl Audio {
             engine: None,
             analyzer: None,
             rx: None,
+            starter: None,
             redirect: None,
             orig_default: None,
             default_changed: false,
@@ -117,6 +122,7 @@ impl Audio {
             ready: false,
             status: format!("Synthetic audio ({}); EQ engine off", fx.name()),
             source_pre: false,
+            analyzing: true,
             gains,
             last_check: Instant::now(),
             synth: Some((fx, src)),
@@ -146,19 +152,21 @@ impl Audio {
     }
 
     fn begin(&mut self, target: String) {
+        self.finish_startup();
+        self.last_check = Instant::now();
         self.status = "Starting equalizer…".into();
         self.ready = false;
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
-        std::thread::spawn(move || {
+        self.starter = Some(std::thread::spawn(move || {
             let r = Engine::start(&target);
             let _ = tx.send((target, r));
-        });
+        }));
     }
 
     fn retarget(&mut self) {
         self.analyzer = None;
-        if self.synth.is_some() {
+        if self.synth.is_some() || !self.analyzing {
             return;
         }
         let dev = if self.ready && self.source_pre {
@@ -174,7 +182,15 @@ impl Audio {
         }
     }
 
-    /// Call every frame.
+    /// Keep the PipeWire EQ running, but release the visualization's capture when hidden.
+    pub fn set_analyzing(&mut self, on: bool) {
+        if self.analyzing != on {
+            self.analyzing = on;
+            self.retarget();
+        }
+    }
+
+    /// Called by background logic as well as when the window is visible.
     pub fn poll(&mut self) {
         if let Some(rx) = &self.rx {
             if let Ok((target, result)) = rx.try_recv() {
@@ -198,6 +214,15 @@ impl Audio {
                 }
                 self.retarget(); // re-open after the default sink moved so it stays on our tap
             }
+        }
+        // Login can precede PipeWire/device startup. Recover without requiring a visible window.
+        if self.synth.is_none() && !self.ready && self.rx.is_none() && self.last_check.elapsed() > Duration::from_secs(5) {
+            self.last_check = Instant::now();
+            let sinks = routing::list_sinks();
+            let target = self.real_sink.clone().filter(|t| sinks.iter().any(|(n, _)| n == t))
+                .or_else(|| routing::default_sink().filter(|t| !t.starts_with("geq_")))
+                .or_else(|| sinks.first().map(|(n, _)| n.clone()));
+            if let Some(t) = target { self.begin(t); }
         }
         if self.ready && self.last_check.elapsed() > Duration::from_secs(2) {
             self.last_check = Instant::now();
@@ -262,7 +287,15 @@ impl Audio {
         }
     }
 
+    fn finish_startup(&mut self) {
+        // Closing the receiver drops a completed engine, or makes the worker drop it on send.
+        // Join before process exit so quitting during login cannot orphan a PipeWire child.
+        self.rx = None;
+        if let Some(worker) = self.starter.take() { let _ = worker.join(); }
+    }
+
     pub fn shutdown(&mut self) {
+        self.finish_startup();
         if let Some((_, SynthSource::Thread { stop, .. })) = &self.synth {
             stop.store(true, Ordering::Relaxed);
         }
@@ -278,5 +311,34 @@ impl Audio {
         }
         self.engine = None;
         self.ready = false;
+    }
+}
+
+impl Drop for Audio {
+    fn drop(&mut self) { self.shutdown(); }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn quitting_during_startup_waits_for_worker_cleanup() {
+        let mut audio = Audio::new_synth(Fixture::Silence, None, true, [0.0; bands::COUNT]);
+        let (tx, rx) = mpsc::channel();
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let done = cleaned.clone();
+        audio.rx = Some(rx);
+        audio.starter = Some(std::thread::spawn(move || {
+            // The receiver is closed before join, so a late startup cannot become active.
+            while !tx.send(("test".into(), Err("test startup".into()))).is_err() {
+                std::thread::yield_now();
+            }
+            done.store(true, Ordering::SeqCst);
+        }));
+        audio.shutdown();
+        assert!(cleaned.load(Ordering::SeqCst));
+        assert!(audio.starter.is_none() && audio.rx.is_none());
+        audio.shutdown(); // explicit quit followed by Drop is harmless
     }
 }

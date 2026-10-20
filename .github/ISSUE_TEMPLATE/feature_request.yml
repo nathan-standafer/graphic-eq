@@ -1,0 +1,21 @@
+name: Feature or scene idea
+description: Suggest an improvement to the sound, visuals, or desktop experience.
+title: "[Idea] "
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to do?
+      description: Describe the experience you want and why it would be useful.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: How should it work?
+      description: For visualizations, explain how the music should affect the scene and what happens in silence.
+  - type: textarea
+    id: references
+    attributes:
+      label: References or examples
+      description: Optional sketches, screenshots, or links that help explain the idea.

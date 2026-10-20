@@ -102,6 +102,8 @@ fn percentile(v: &mut Vec<f32>, p: f32) -> f32 {
 
 pub struct App {
     cfg: Settings,
+    desktop: Option<crate::desktop::Desktop>,
+    hidden: bool,
     audio: Audio,
     quit: Arc<AtomicBool>,
     disp: [f32; bands::COUNT],
@@ -154,7 +156,7 @@ fn blank_signals() -> Signals {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> App {
+    pub fn new(cc: &eframe::CreationContext<'_>, desktop: Option<crate::desktop::Desktop>, hidden: bool) -> App {
         clock::init();
         let mut cfg = Settings::load();
         let rs = cc.wgpu_render_state.as_ref().expect("wgpu backend required");
@@ -163,7 +165,11 @@ impl App {
 
         let quit = Arc::new(AtomicBool::new(false));
         let q = quit.clone();
-        let _ = ctrlc::set_handler(move || q.store(true, Ordering::SeqCst));
+        let wake = cc.egui_ctx.clone();
+        let _ = ctrlc::set_handler(move || {
+            q.store(true, Ordering::SeqCst);
+            wake.request_repaint();
+        });
 
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = Color32::from_rgb(14, 16, 22);
@@ -255,6 +261,8 @@ impl App {
 
         let mut app = App {
             cfg,
+            desktop,
+            hidden,
             audio,
             quit,
             disp: [FLOOR_DB; bands::COUNT],
@@ -322,6 +330,21 @@ impl App {
 
     fn frac(&self, db: f32) -> f32 {
         ((db + self.cfg.sensitivity + self.cfg.range) / self.cfg.range).clamp(0.0, 1.0)
+    }
+
+    fn show_window(&mut self, ctx: &egui::Context) {
+        self.hidden = false;
+        self.last_wall = clock::now();
+        self.hist_acc = 0.0;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    fn hide_window(&mut self, ctx: &egui::Context) {
+        self.hidden = true;
+        self.cfg.save();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 
     fn touch(&mut self) {
@@ -542,10 +565,6 @@ fn effective(cfg: &Settings) -> [f32; bands::COUNT] {
     if cfg.eq_on { cfg.gains } else { [0.0; bands::COUNT] }
 }
 
-fn fmt_gain(g: f32) -> String {
-    if g.abs() < 0.05 { "0".into() } else { format!("{g:+.1}") }
-}
-
 enum Action {
     Scene(u32),
     Look(usize),
@@ -555,6 +574,70 @@ enum Action {
 }
 
 impl eframe::App for App {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        use crate::desktop::Action;
+        let actions = self.desktop.as_ref().map(|d| d.actions()).unwrap_or_default();
+        for action in actions {
+            match action {
+                Action::Show => self.show_window(ctx),
+                Action::Hide => {
+                    if self.desktop.as_ref().is_some_and(|d| d.tray_ready) { self.hide_window(ctx); }
+                }
+                Action::Quit => self.quit.store(true, Ordering::SeqCst),
+                Action::Tray(ready) => {
+                    if let Some(d) = &mut self.desktop { d.tray_ready = ready; }
+                    if !ready && self.hidden { self.show_window(ctx); }
+                }
+                Action::Toggle => {
+                    self.cfg.eq_on = !self.cfg.eq_on;
+                    self.push_gains();
+                    self.touch();
+                }
+                Action::Enable(on) => {
+                    self.cfg.eq_on = on;
+                    self.push_gains();
+                    self.touch();
+                }
+                Action::Preset(i) => {
+                    if let Some((name, gains)) = PRESETS.get(i) {
+                        self.cfg.preset = (*name).into();
+                        self.cfg.gains = *gains;
+                        self.push_gains();
+                        self.touch();
+                    }
+                }
+            }
+        }
+        if self.quit.load(Ordering::SeqCst) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        if ctx.input(|i| i.viewport().close_requested())
+            && self.shot.is_none() && self.desktop.as_ref().is_some_and(|d| d.tray_ready) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.hide_window(ctx);
+        }
+        // If the desktop has no tray host, keep an accessible window instead of disappearing.
+        if self.hidden && self.desktop.as_ref().is_some_and(|d| !d.tray_ready && d.started.elapsed().as_secs() >= 5) {
+            self.show_window(ctx);
+        }
+        self.audio.set_analyzing(!self.hidden);
+        self.audio.poll();
+        if self.hidden {
+            self.audio.take_events();
+            self.audio.take_drums();
+        }
+        if self.dirty_since.is_some_and(|t| t.elapsed().as_millis() > 500) {
+            self.cfg.save();
+            self.dirty_since = None;
+        }
+        if let Some(d) = &mut self.desktop {
+            d.publish(&self.cfg, self.audio.ready, &self.audio.status, self.hidden);
+        }
+        // Also maintains audio and receives signal/IPC requests when there are no UI frames.
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.quit.load(Ordering::SeqCst) {
@@ -648,7 +731,6 @@ impl eframe::App for App {
         }
 
         // ---- audio, levels, modulation
-        self.audio.poll();
         self.audio.advance(self.now);
         let lv: Levels = self.audio.levels().unwrap_or_default();
         let events = self.audio.take_events();
@@ -688,12 +770,6 @@ impl eframe::App for App {
             self.next_cycle = self.now + self.cfg.cycle_secs as f64;
         }
 
-        // debounce settings writes
-        if self.dirty_since.map_or(false, |t| t.elapsed().as_millis() > 500) {
-            self.cfg.save();
-            self.dirty_since = None;
-        }
-
         // ---------------------------------------------------------------- header
         if !self.fullscreen && !self.bare { egui::Panel::top("top").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
@@ -723,6 +799,9 @@ impl eframe::App for App {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(6.0);
+                    if ui.button("Quit").on_hover_text("Stop SpectraForgeEQ and restore normal audio").clicked() {
+                        self.quit.store(true, Ordering::SeqCst);
+                    }
                     self.options_menu(ui, frame);
                     if ui.button("Full screen").on_hover_text("F or F11 (Esc to leave)").clicked() {
                         self.set_fullscreen(&ctx, true);
@@ -910,79 +989,11 @@ impl App {
 
     fn eq_strip(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("sliders").show_inside(ui, |ui| {
-            ui.add_space(8.0);
-            let mut changed = false;
-            let (_, look) = self.look_key(self.cfg.scene);
-            let accent = |i: usize| -> Color32 {
-                // each band's accent follows the active theme along its position
-                let t = i as f32 / (bands::COUNT - 1) as f32;
-                theme_color(self.cfg.theme, t)
-            };
-            let _ = look;
-            ui.columns(bands::COUNT, |cols| {
-                for (i, col) in cols.iter_mut().enumerate() {
-                    col.vertical_centered(|ui| {
-                        let mut g = self.cfg.gains[i];
-                        let lit = self.levels_f[i];
-                        ui.label(RichText::new(fmt_gain(g)).monospace().size(12.5).color(
-                            if g.abs() < 0.05 { Color32::from_gray(120) } else { Color32::from_gray(235) },
-                        ));
-                        ui.spacing_mut().slider_width = 150.0;
-                        let pad = (ui.available_width() - ui.spacing().interact_size.y) / 2.0;
-                        let r = ui
-                            .horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                ui.add_space(pad.max(0.0));
-                                ui.add(
-                                    egui::Slider::new(&mut g, bands::GAIN_MIN..=bands::GAIN_MAX)
-                                        .vertical()
-                                        .step_by(0.5)
-                                        .show_value(false),
-                                )
-                            })
-                            .inner;
-                        // zero mark and 6 dB ticks beside the rail
-                        let rect = r.rect;
-                        let half = ui.spacing().interact_size.y * 0.5 * 0.55;
-                        let (top, bot) = (rect.top() + half, rect.bottom() - half);
-                        let y_at = |db: f32| bot + (top - bot) * ((db - bands::GAIN_MIN) / (bands::GAIN_MAX - bands::GAIN_MIN));
-                        let p = ui.painter();
-                        for db in [-12.0f32, -6.0, 6.0, 12.0] {
-                            let y = y_at(db);
-                            p.line_segment([egui::pos2(rect.center().x + 9.0, y), egui::pos2(rect.center().x + 14.0, y)], egui::Stroke::new(1.0, Color32::from_gray(60)));
-                        }
-                        let y0 = y_at(0.0);
-                        p.line_segment(
-                            [egui::pos2(rect.center().x - 16.0, y0), egui::pos2(rect.center().x - 10.0, y0)],
-                            egui::Stroke::new(1.5, Color32::from_gray(140)),
-                        );
-                        p.line_segment(
-                            [egui::pos2(rect.center().x + 10.0, y0), egui::pos2(rect.center().x + 16.0, y0)],
-                            egui::Stroke::new(1.5, Color32::from_gray(140)),
-                        );
-                        if r.double_clicked() {
-                            g = 0.0;
-                        }
-                        if r.changed() || r.double_clicked() {
-                            self.cfg.gains[i] = g;
-                            changed = true;
-                        }
-                        ui.add_space(2.0);
-                        ui.label(RichText::new(bands::label(bands::FREQS[i])).strong().size(14.0));
-                        // a small accent that brightens with the band's level
-                        let (bar, _) = ui.allocate_exact_size(egui::vec2(22.0, 3.0), egui::Sense::hover());
-                        let a = accent(i);
-                        let k = 0.18 + 0.82 * lit;
-                        ui.painter().rect_filled(bar, 1.5, Color32::from_rgb((a.r() as f32 * k) as u8, (a.g() as f32 * k) as u8, (a.b() as f32 * k) as u8));
-                    });
-                }
-            });
-            if changed {
+            if crate::eq_strip::show(ui, &mut self.cfg.gains, &self.levels_f, self.cfg.theme) {
                 self.cfg.preset = CUSTOM.into();
                 self.push_gains();
                 self.touch();
             }
-            ui.add_space(6.0);
         });
     }
 
@@ -1379,26 +1390,4 @@ impl App {
         .response
         .on_hover_text("Display and audio options");
     }
-}
-
-/// A theme's colour along its dominant -> supporting -> accent ramp, for UI accents (0..1).
-fn theme_color(theme: u32, t: f32) -> Color32 {
-    let ramp = |a: [f32; 3], b: [f32; 3], c: [f32; 3]| -> [f32; 3] {
-        let (lo, hi) = (((t / 0.6).clamp(0.0, 1.0)), ((t - 0.6) / 0.4).clamp(0.0, 1.0));
-        let m = |x: [f32; 3], y: [f32; 3], k: f32| [x[0] + (y[0] - x[0]) * k, x[1] + (y[1] - x[1]) * k, x[2] + (y[2] - x[2]) * k];
-        if t < 0.6 { m(a, b, lo) } else { m(b, c, hi) }
-    };
-    let c = match theme {
-        0 => ramp([0.10, 1.0, 0.35], [1.0, 0.9, 0.2], [1.0, 0.15, 0.2]),
-        1 => ramp([1.0, 0.65, 0.0], [1.0, 0.4, 0.0], [1.0, 0.12, 0.0]),
-        2 => ramp([0.0, 0.9, 1.0], [0.3, 0.5, 1.0], [0.75, 0.3, 1.0]),
-        3 => ramp([1.0, 0.15, 0.85], [0.5, 0.35, 1.0], [0.0, 0.9, 1.0]),
-        _ => {
-            let h = (0.85 - 0.8 * t).rem_euclid(1.0);
-            let hsv = egui::ecolor::Hsva::new(h, 0.85, 1.0, 1.0);
-            let c = Color32::from(hsv);
-            return c;
-        }
-    };
-    Color32::from_rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8)
 }

@@ -1,0 +1,35 @@
+name: Bug report
+description: Report an audio, visualization, or desktop integration problem.
+title: "[Bug] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Explain what you expected and what you saw or heard instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open SpectraForgeEQ…"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Your setup
+      description: Linux version, desktop/session, GPU/driver, audio output, and installed app or development build.
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Scene and settings
+      description: Include the scene/look, EQ preset, and whether the window was open or hidden.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots and relevant logs
+      description: Add a screenshot for visual problems and any relevant error messages.

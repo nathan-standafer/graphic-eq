@@ -805,6 +805,81 @@ mod headless {
             .collect()
     }
 
+    /// Render the real EQ widgets in every palette without a desktop or audio routing.
+    /// GEQ_UI_WIDTH=760 exercises the minimum window width.
+    #[test]
+    #[ignore]
+    fn headless_eq_strip() {
+        let w: u32 = std::env::var("GEQ_UI_WIDTH").ok().and_then(|v| v.parse().ok()).unwrap_or(1180);
+        let theme: Option<u32> = std::env::var("GEQ_UI_THEME").ok().and_then(|v| v.parse().ok());
+        let themes = theme.map_or(0..5, |t| t..t + 1);
+        let h = if theme.is_some() { 280 } else { 1350 };
+        let ctx = eframe::egui::Context::default();
+        ctx.set_visuals(eframe::egui::Visuals::dark());
+        let input = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO, eframe::egui::vec2(w as f32, h as f32))),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            eframe::egui::CentralPanel::default().show(ui, |ui| {
+                for theme in themes.clone() {
+                    ui.push_id(theme, |ui| {
+                        let mut gains = [0.0, 3.0, 6.0, 1.5, -3.0, -6.0, 0.0, 4.5, 9.0, -12.0, 12.0];
+                        let levels = [0.85, 0.72, 0.6, 0.48, 0.65, 0.4, 0.56, 0.32, 0.7, 0.25, 0.16];
+                        crate::eq_strip::show(ui, &mut gains, &levels, theme);
+                    });
+                }
+            });
+        });
+        let jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            force_fallback_adapter: true, ..Default::default()
+        })).expect("software adapter");
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("device");
+        let fmt = wgpu::TextureFormat::Rgba8Unorm;
+        let mut renderer = eframe::egui_wgpu::Renderer::new(&device, fmt, Default::default());
+        for (id, deltas) in &output.textures_delta.set {
+            for delta in deltas {
+                renderer.update_texture(&device, &queue, *id, delta);
+            }
+        }
+        output.textures_delta.clear();
+        let screen = ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: 1.0 };
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("eq_preview"), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: fmt,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let mut enc = device.create_command_encoder(&Default::default());
+        let commands = renderer.update_buffers(&device, &queue, &mut enc, &jobs, &screen);
+        {
+            let pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view, depth_slice: None, resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })], ..Default::default()
+            });
+            renderer.render(&mut pass.forget_lifetime(), &jobs, &screen);
+        }
+        let row = (w * 4).next_multiple_of(256);
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None, size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit(commands.into_iter().chain(std::iter::once(enc.finish())));
+        buf.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let data = buf.slice(..).get_mapped_range().unwrap();
+        let rgba: Vec<u8> = data.chunks(row as usize).flat_map(|r| r[..(w * 4) as usize].iter().copied()).collect();
+        image::save_buffer(format!("/tmp/geq-faders-{w}.png"), &rgba, w, h, image::ColorType::Rgba8).unwrap();
+    }
+
     #[test]
     #[ignore]
     fn headless_scene() {

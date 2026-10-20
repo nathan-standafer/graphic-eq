@@ -1,4 +1,4 @@
-//! The equalizer itself: a PipeWire filter-chain exposed as a virtual sink ("Graphic EQ").
+//! The equalizer itself: a PipeWire filter-chain exposed as a virtual sink ("SpectraForgeEQ").
 //! Gains are changed live with pw-cli; slider drags coalesce into few calls.
 
 use crate::{bands, routing, routing::VIRTUAL_SINK};
@@ -31,8 +31,8 @@ context.modules = [
   {{ name = libpipewire-module-client-node }}
   {{ name = libpipewire-module-adapter }}
   {{ name = libpipewire-module-filter-chain args = {{
-      node.description = "Graphic EQ"
-      media.name = "Graphic EQ"
+      node.description = "SpectraForgeEQ"
+      media.name = "SpectraForgeEQ"
       filter.graph = {{
         nodes = [ {nodes} ]
         links = [ {links} ]

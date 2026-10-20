@@ -428,7 +428,7 @@ impl Analyzer {
                 "--rate=48000",
                 "--channels=2",
                 "--latency-msec=10",
-                "--client-name=Graphic EQ analyzer",
+                "--client-name=SpectraForgeEQ analyzer",
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
