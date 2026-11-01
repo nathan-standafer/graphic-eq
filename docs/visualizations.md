@@ -4,6 +4,15 @@
 
 Eight scenes, each with curated looks that combine palette, exposure, bloom and motion.
 
+**Automatic camera orbit:** 3D columns, Waterfall, Fountain and Fireworks offer
+**Display → Camera → Helicopter orbit**. The camera makes a complete circle around the scene,
+rising gently into an elevated view with a slight bank and a slowly varying distance.
+The option starts off and is saved separately for each scene, including its **seconds per orbit**
+setting (20–180, default 60). Flight continues through silence. Dragging, panning or zooming
+pauses flight for four seconds, then it eases back into motion. Double-click resets the camera
+and pauses before resuming. Turning orbit off eases out at the current heading. **Motion = 0**
+freezes the flight, and hiding the window pauses it until the window reopens.
+
 - **3D columns** - segmented LED cores in glass housings on a glossy floor. Optional **Sparks** (Display
   menu, on by default): each lit column sheds embers from the top of its strip in proportion to its
   level, and every drum hit throws a fan of sparks from the column at its place on the frequency axis (kicks

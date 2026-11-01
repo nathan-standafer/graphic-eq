@@ -2,6 +2,7 @@ mod analyzer;
 mod app;
 mod audio;
 mod bands;
+mod camera;
 mod clock;
 mod drums;
 #[cfg(test)]

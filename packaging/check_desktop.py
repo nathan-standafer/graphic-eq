@@ -47,9 +47,10 @@ def main():
 
             try:
                 p = start()
-                wait_for(lambda s: s.get('hidden') and s.get('tray'), 'Quiet login startup with tray')
                 # Check native visibility too: internal hidden state alone can miss a UI regression.
-                assert not windows_for(p), 'Background startup mapped a window'
+                # Status is published before the window manager applies visibility commands.
+                wait_for(lambda s: s.get('hidden') and s.get('tray') and not windows_for(p),
+                         'Quiet login startup with tray')
                 command('--background')
                 assert not windows_for(p), 'Repeated background launch opened a window'
                 command('--disable')

@@ -36,6 +36,7 @@ pub struct Settings {
     pub source_pre: bool, // analyze before the EQ
     pub output: Option<String>,
     pub motion: f32,      // camera and geometry movement, 0 = still
+    pub camera_orbits: BTreeMap<u32, crate::camera::OrbitSettings>, // per stable scene ID
     pub flash: f32,       // onset accents and flashes, 0 = none
     #[serde(deserialize_with = "looks_compat")]
     pub look: [u32; SCENES], // selected visual preset per scene
@@ -82,6 +83,7 @@ impl Default for Settings {
             source_pre: false,
             output: None,
             motion: 0.7,
+            camera_orbits: BTreeMap::new(),
             flash: 0.8,
             look: [0; SCENES],
             sparks: true,
@@ -145,6 +147,21 @@ pub const PRESETS: [(&str, [f32; 11]); 10] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_orbits_default_off_and_round_trip_per_scene() {
+        let mut settings: Settings = serde_json::from_str(r#"{"eq_on": false, "gains": [1,0,0,0,0,0,0,0,0,0,0]}"#).unwrap();
+        assert!(settings.camera_orbits.is_empty());
+        settings.camera_orbits.insert(crate::scenes::FIREWORKS,
+            crate::camera::OrbitSettings { enabled: true, seconds: 90.0 });
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        let flight = restored.camera_orbits.get(&crate::scenes::FIREWORKS).unwrap();
+        assert!(flight.enabled);
+        assert_eq!(flight.seconds, 90.0);
+        assert!(!restored.camera_orbits.get(&crate::scenes::COLUMNS).copied().unwrap_or_default().enabled);
+        assert!(!restored.eq_on);
+        assert_eq!(restored.gains[0], 1.0);
+    }
 
     #[test]
     fn retired_scenes_fall_back_without_shifting_saved_looks() {

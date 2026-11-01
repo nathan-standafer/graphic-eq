@@ -122,6 +122,8 @@ Runtime dependencies are PipeWire, `pipewire-pulse`, the PulseAudio utilities (`
 
 The **Display** menu holds colors, glow, scene settings, favorites and automatic cycling. **Motion** and **Flash** are separate controls, so you can keep the spectrum moving while dialing back the effects.
 
+For **3D columns**, **Waterfall**, **Fountain** and **Fireworks**, enable **Display → Camera → Helicopter orbit** to fly around the scene. Adjust the orbit time from 20 to 180 seconds; each scene remembers its own choice. Drag or zoom to pause the flight briefly, or set **Motion** to zero to hold the view still.
+
 Click the **tray icon** to open the window. Right-click it for EQ enable/bypass, presets and Quit. Closing the window leaves the equalizer active; **Quit** stops it.
 
 ## Under the hood

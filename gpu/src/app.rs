@@ -137,6 +137,7 @@ pub struct App {
     shot: Option<(String, f64)>, // GEQ_SHOT=path[,seconds]: save a screenshot of this window and exit
     shot_sent: bool,
     cams: [CamState; scenes::ID_SLOTS],
+    flights: [crate::camera::Flight; scenes::ID_SLOTS],
     idle: IdleCam,
     fullscreen: bool,
     /// GEQ_BARE=1: scene only, no panels or overlay (captures at an exact aspect without going full screen).
@@ -291,6 +292,7 @@ impl App {
             shot,
             shot_sent: false,
             cams,
+            flights: [crate::camera::Flight::default(); scenes::ID_SLOTS],
             idle: IdleCam { amount: 1.0, phase: 0.0, last_input: -100.0 },
             fullscreen: std::env::var_os("GEQ_FAKE_FS").is_some(), // GEQ_FAKE_FS=1: fullscreen UI state without the window change
             bare: std::env::var_os("GEQ_BARE").is_some(),
@@ -495,6 +497,10 @@ impl App {
     fn params_for(&self, r: &Resolved, cam: &CamState, sig: &Signals) -> SceneParams {
         let mut cam = *cam;
         cam.idle = self.idle.offsets(&r.look.idle, r.motion);
+        if crate::camera::supports_flight(r.scene) {
+            let aspect = self.diag.last_size[0] as f32 / self.diag.last_size[1].max(1) as f32;
+            cam.idle = self.flights[r.scene as usize].offsets(cam.idle, aspect);
+        }
         SceneParams {
             time: self.now as f32,
             mode: r.mode,
@@ -850,6 +856,7 @@ impl eframe::App for App {
             }
             if resp.double_clicked() {
                 self.cams[s] = CamState::default();
+                self.flights[s] = crate::camera::Flight::default();
                 touched = true;
             }
             if lim.yaw.is_finite() {
@@ -858,6 +865,10 @@ impl eframe::App for App {
             self.cams[s].pitch = self.cams[s].pitch.clamp(lim.pitch.0, lim.pitch.1);
             if touched {
                 self.idle.last_input = self.now;
+            }
+            if crate::camera::supports_flight(self.cfg.scene) {
+                let options = self.cfg.camera_orbits.get(&self.cfg.scene).copied().unwrap_or_default();
+                self.flights[s].step(&mut self.cams[s], options, dt, self.cfg.motion, touched);
             }
             if resp.hovered() || resp.dragged() {
                 ctx.set_cursor_icon(if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
@@ -1308,6 +1319,19 @@ impl App {
                             .on_hover_text("How long a ripple lives. Short gives a quick, clean pond; long a surface crowded with the last several seconds of hits.")
                             .changed();
                     }
+                }
+                ui.add_space(4.0);
+            }
+
+            if crate::camera::supports_flight(self.cfg.scene) {
+                ui.label(RichText::new("CAMERA").small().weak());
+                let orbit = self.cfg.camera_orbits.entry(self.cfg.scene).or_default();
+                touched |= ui.checkbox(&mut orbit.enabled, "Helicopter orbit")
+                    .on_hover_text("Circle this display with a gentle rise and bank. Saved separately for each scene. Drag or zoom to pause for four seconds; Motion at 0 freezes the flight.")
+                    .changed();
+                if orbit.enabled {
+                    touched |= ui.add(egui::Slider::new(&mut orbit.seconds, 20.0..=180.0)
+                        .text("seconds per orbit")).changed();
                 }
                 ui.add_space(4.0);
             }
