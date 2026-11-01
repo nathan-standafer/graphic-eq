@@ -18,6 +18,9 @@ def send(command):
 
 
 def main():
+    # XApp derives its D-Bus name from the program name. Embedded Python otherwise
+    # uses "-c", colliding with other helpers and isolated desktop test instances.
+    GLib.set_prgname(f'spectraforgeeq_{os.getpid()}')
     if not Gtk.init_check()[0]:
         raise RuntimeError('No desktop display available')
     icon = XApp.StatusIcon.new_with_name('SpectraForgeEQ')

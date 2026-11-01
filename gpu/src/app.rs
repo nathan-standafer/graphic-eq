@@ -581,12 +581,14 @@ impl eframe::App for App {
             match action {
                 Action::Show => self.show_window(ctx),
                 Action::Hide => {
-                    if self.desktop.as_ref().is_some_and(|d| d.tray_ready) { self.hide_window(ctx); }
+                    if self.desktop.as_ref().is_some_and(|d| d.tray_state.ready()) { self.hide_window(ctx); }
                 }
                 Action::Quit => self.quit.store(true, Ordering::SeqCst),
                 Action::Tray(ready) => {
-                    if let Some(d) = &mut self.desktop { d.tray_ready = ready; }
-                    if !ready && self.hidden { self.show_window(ctx); }
+                    if let Some(d) = &mut self.desktop { d.tray_state.update(ready); }
+                }
+                Action::TrayExited => {
+                    if let Some(d) = &mut self.desktop { d.tray_state.exited(); }
                 }
                 Action::Toggle => {
                     self.cfg.eq_on = !self.cfg.eq_on;
@@ -613,13 +615,17 @@ impl eframe::App for App {
             return;
         }
         if ctx.input(|i| i.viewport().close_requested())
-            && self.shot.is_none() && self.desktop.as_ref().is_some_and(|d| d.tray_ready) {
+            && self.shot.is_none() && self.desktop.as_ref().is_some_and(|d| d.tray_state.ready()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_window(ctx);
         }
         // If the desktop has no tray host, keep an accessible window instead of disappearing.
-        if self.hidden && self.desktop.as_ref().is_some_and(|d| !d.tray_ready && d.started.elapsed().as_secs() >= 5) {
+        if self.hidden && self.desktop.as_ref().is_some_and(|d| d.tray_state.needs_window(Instant::now())) {
             self.show_window(ctx);
+        }
+        // Keep native visibility in sync, including eframe's first-frame window setup.
+        if self.hidden {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
         self.audio.set_analyzing(!self.hidden);
         self.audio.poll();

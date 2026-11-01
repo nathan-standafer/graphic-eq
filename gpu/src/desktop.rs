@@ -14,7 +14,39 @@ pub const ICON: &[u8] = include_bytes!("../assets/spectraforgeeq.png");
 
 #[derive(Debug, PartialEq)]
 pub enum Action {
-    Show, Hide, Quit, Toggle, Enable(bool), Preset(usize), Tray(bool),
+    Show, Hide, Quit, Toggle, Enable(bool), Preset(usize), Tray(bool), TrayExited,
+}
+
+// Cinnamon's panel can register after the application during login.
+const TRAY_STARTUP_GRACE: Duration = Duration::from_secs(30);
+
+pub struct TrayState {
+    ready: bool,
+    was_ready: bool,
+    exited: bool,
+    started: Instant,
+}
+
+impl TrayState {
+    fn new(started: Instant, exited: bool) -> Self {
+        Self { ready: false, was_ready: false, exited, started }
+    }
+
+    pub fn ready(&self) -> bool { self.ready }
+
+    pub fn update(&mut self, ready: bool) {
+        self.ready = ready;
+        self.was_ready |= ready;
+    }
+
+    pub fn exited(&mut self) {
+        self.ready = false;
+        self.exited = true;
+    }
+
+    pub fn needs_window(&self, now: Instant) -> bool {
+        !self.ready && (self.exited || self.was_ready || now.duration_since(self.started) >= TRAY_STARTUP_GRACE)
+    }
 }
 
 pub fn parse(s: &str) -> Option<Action> {
@@ -92,8 +124,7 @@ pub struct Desktop {
     rx: mpsc::Receiver<Action>,
     status: Arc<Mutex<String>>,
     last_status: String,
-    pub tray_ready: bool,
-    pub started: Instant,
+    pub tray_state: TrayState,
     _instance: Instance,
 }
 
@@ -138,11 +169,12 @@ impl Desktop {
                         ctx.request_repaint();
                     }
                 }
-                let _ = tx.send(Action::Tray(false));
+                let _ = tx.send(Action::TrayExited);
                 ctx.request_repaint();
             });
         }
-        Self { tray, tray_input, rx, status, last_status: String::new(), tray_ready: false, started: Instant::now(), _instance: instance }
+        let tray_state = TrayState::new(Instant::now(), tray.is_none());
+        Self { tray, tray_input, rx, status, last_status: String::new(), tray_state, _instance: instance }
     }
 
     pub fn actions(&self) -> Vec<Action> { self.rx.try_iter().collect() }
@@ -150,7 +182,7 @@ impl Desktop {
     pub fn publish(&mut self, cfg: &crate::settings::Settings, ready: bool, status: &str, hidden: bool) {
         let state = serde_json::json!({
             "eq_on": cfg.eq_on, "preset": cfg.preset, "ready": ready, "status": status,
-            "hidden": hidden, "tray": self.tray_ready,
+            "hidden": hidden, "tray": self.tray_state.ready(),
             "presets": crate::settings::PRESETS.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
         }).to_string();
         if state != self.last_status {
@@ -176,6 +208,33 @@ impl Drop for Desktop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delayed_panel_keeps_background_startup_hidden() {
+        let start = Instant::now();
+        let mut tray = TrayState::new(start, false);
+        tray.update(false); // XApp initially reports NO_SUPPORT while Cinnamon starts.
+        assert!(!tray.needs_window(start + Duration::from_millis(1500)));
+        assert!(!tray.needs_window(start + Duration::from_secs(10)));
+        tray.update(true);
+        assert!(tray.ready());
+        assert!(!tray.needs_window(start + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn missing_or_failed_tray_keeps_window_accessible() {
+        let start = Instant::now();
+        let mut tray = TrayState::new(start, false);
+        assert!(tray.needs_window(start + TRAY_STARTUP_GRACE));
+        tray.update(true);
+        tray.update(false);
+        assert!(tray.needs_window(start + Duration::from_secs(2)));
+
+        let mut tray = TrayState::new(start, false);
+        tray.exited();
+        assert!(tray.needs_window(start));
+        assert!(TrayState::new(start, true).needs_window(start));
+    }
     #[test]
     fn controls_reject_invalid_commands_and_out_of_range_presets() {
         assert_eq!(parse("on"), Some(Action::Enable(true)));

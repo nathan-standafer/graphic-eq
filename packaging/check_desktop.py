@@ -26,6 +26,11 @@ def main():
             def command(arg):
                 return subprocess.check_output([str(BINARY), arg], env=env, text=True, stderr=log, timeout=6).strip()
 
+            def windows_for(process):
+                windows = subprocess.check_output(['wmctrl', '-lp'], text=True)
+                return [line.split()[0] for line in windows.splitlines()
+                        if int(line.split()[2]) == process.pid]
+
             def wait_for(predicate, description):
                 deadline = time.monotonic() + 30
                 last = None
@@ -43,6 +48,10 @@ def main():
             try:
                 p = start()
                 wait_for(lambda s: s.get('hidden') and s.get('tray'), 'Quiet login startup with tray')
+                # Check native visibility too: internal hidden state alone can miss a UI regression.
+                assert not windows_for(p), 'Background startup mapped a window'
+                command('--background')
+                assert not windows_for(p), 'Repeated background launch opened a window'
                 command('--disable')
                 wait_for(lambda s: not s.get('eq_on', True), 'Bypass while hidden')
                 command('--enable')
@@ -50,15 +59,14 @@ def main():
                 wait_for(lambda s: s.get('eq_on') and s.get('preset') == 'Bass Boost', 'Preset and EQ enable while hidden')
                 # Default launch must activate the existing process and immediately return.
                 subprocess.run([str(BINARY)], env=env, check=True, timeout=6)
-                wait_for(lambda s: not s.get('hidden', True), 'Repeated launcher opens existing instance')
-                windows = subprocess.check_output(['wmctrl', '-lp'], text=True)
-                window = next(line.split()[0] for line in windows.splitlines() if int(line.split()[2]) == p.pid)
+                wait_for(lambda s: not s.get('hidden', True) and windows_for(p), 'Repeated launcher opens existing instance')
+                window = windows_for(p)[0]
                 subprocess.run(['wmctrl', '-ic', window], check=True)
-                wait_for(lambda s: s.get('hidden'), 'Window close keeps EQ and tray running')
+                wait_for(lambda s: s.get('hidden') and not windows_for(p), 'Window close keeps EQ and tray running')
                 command('--show')
-                wait_for(lambda s: not s.get('hidden', True), 'Tray-style reopen')
+                wait_for(lambda s: not s.get('hidden', True) and windows_for(p), 'Tray-style reopen')
                 command('--hide')
-                wait_for(lambda s: s.get('hidden'), 'Hide command')
+                wait_for(lambda s: s.get('hidden') and not windows_for(p), 'Hide command')
                 # A failed tray must not strand an invisible app.
                 children = subprocess.check_output(['ps', '-o', 'pid=,comm=', '--ppid', str(p.pid)], text=True)
                 tray_pid = next(int(line.split()[0]) for line in children.splitlines() if 'python3' in line)

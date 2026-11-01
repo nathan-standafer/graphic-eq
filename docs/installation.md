@@ -26,7 +26,9 @@ by the installed app. The icon and tray bridge are embedded in the executable.
   presets and Quit, with live status. Launching it again opens the existing instance.
 - Closing the window hides it while the EQ continues. Visualization rendering and real-audio
   analysis pause while hidden. **Quit** stops the engine and restores normal playback routing.
-- If no tray is available, the app shows its window and closing it quits normally.
+- At login, the app waits up to 30 seconds for the desktop's tray to become available.
+  If no tray is available after that, the app shows its window and closing it quits normally.
+  If the tray helper exits or an established tray disappears, the window opens immediately.
 - If PipeWire or an output device is not ready at login, the app retries every five seconds.
 
 Existing settings stay at `~/.config/graphic-eq/gpu-settings.json` (or under `XDG_CONFIG_HOME`),
