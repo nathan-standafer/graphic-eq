@@ -1288,7 +1288,7 @@ impl App {
                         ui.label(RichText::new(if self.cfg.scene == scenes::RIPPLE { "RIPPLES" } else { "SPARKS" }).small().weak());
                         touched |= ui
                             .add(egui::Slider::new(&mut self.cfg.spark_sensitivity, 0.4..=3.0).logarithmic(true).text("sensitivity"))
-                            .on_hover_text("The fountain: how steeply the volume at a frequency must rise to throw sparks. Column sparks, fireworks, storm and pond: how sure the drum detector must be that it heard a drum (a kick, snare, tom, hat or cymbal) before it sets off a burst, a strike or a splash. Higher accepts less certain hits, lower only the clearest. The pond starts more sensitive for frequent ripples.")
+                            .on_hover_text("The fountain: how steeply the volume at a frequency must rise to throw sparks. Column sparks, fireworks, storm and pond: how sure the drum detector must be that it heard a drum (a kick, snare, tom, hat or cymbal) before it sets off a burst, a strike or a splash. Higher accepts less certain hits, lower only the clearest. Fireworks also picks up sharp note attacks. The pond starts more sensitive for frequent ripples.")
                             .changed();
                     }
                     Control::Density => {

@@ -65,7 +65,7 @@ Every image below is captured from the running app using its deterministic demo 
 <td width="50%">
 <h3>Fireworks</h3>
 <img src="docs/images/fireworks.png" alt="Music-reactive fireworks bursting over a reflective floor">
-<p>Drum hits ignite willows, peonies and crackles, colored by the spectrum.</p>
+<p>Comets trace the notes from bass to treble. Drum hits ignite willows, peonies and crackles above them.</p>
 </td>
 </tr>
 <tr>

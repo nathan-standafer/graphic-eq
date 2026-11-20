@@ -85,7 +85,7 @@ measures the scene's own cost, not frame pacing) saves the final composite as a 
 
 `GEQ_SHOT` with a synthetic source steps a simulated clock, so captures repeat exactly. Other hooks:
 `GEQ_PRESET`, `GEQ_THEME`, `GEQ_BLOOM`, `GEQ_MOTION`, `GEQ_FLASH`, `GEQ_STEREO`, `GEQ_ORBIT`,
-`GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor), `GEQ_FWDEBUG=1` (one line per firework hit and burst: its time, kind, strength and where it came from), `GEQ_LTDEBUG=1` (one line per lightning strike: its time, place, strength, strokes and branches), `GEQ_RPDEBUG=1` (one line per pond impulse: a crater or a landing), `GEQ_RIPPLE_LIFE=n` (how long a ripple lives, 0.4-2.5),
+`GEQ_PARTDEBUG=1` (prints where the fountain's live particles are relative to the floor), `GEQ_FWDEBUG=1` (one line per firework hit and burst: its time, kind, strength and position), `GEQ_LTDEBUG=1` (one line per lightning strike: its time, place, strength, strokes and branches), `GEQ_RPDEBUG=1` (one line per pond impulse: a crater or a landing), `GEQ_RIPPLE_LIFE=n` (how long a ripple lives, 0.4-2.5),
 `GEQ_GRADIENT=n` (fountain spark sensitivity), `GEQ_DENSITY=n` (fountain particle density), `GEQ_SPARKS=0` (columns without sparks),
 `GEQ_SPIKES=n` (spike height of the ferrofluid orb, 0.3-1.5),
 `GEQ_CURTAINS=n` (most curtains of the aurora, 2-6), `GEQ_AURORA_SCALE=n` (the aurora's render scale, 0.25-1; default 0.5),

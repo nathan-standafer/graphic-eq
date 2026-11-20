@@ -106,9 +106,6 @@ pub struct Hit {
 
 /// The lightest hit that is reported, as a strength (0 is the fountain's own threshold, `SPARK_START`).
 const HIT_MIN: f32 = 0.18;
-/// Peaks closer than this (in bins, of 192) are one hit; farther apart they are two only when the rise
-/// between them dips below `HIT_VALLEY` of the lower peak, so a snare's broad plateau stays one hit while a
-/// kick and a snare landing together are two. Beyond `HIT_FAR` bins they are always two.
 /// How sure the drum model must be of a hit (its probability) at Sensitivity 1, how much each doubling of
 /// Sensitivity lowers that, and the range it is kept to (the detector itself reports nothing below
 /// `DRUM_P_MIN`). 0.9 is the design point: against 0.8 it costs a few percent of the kicks, snares and cymbals
@@ -204,44 +201,35 @@ pub fn column_pushes(hits: &[Hit]) -> [f32; 11] {
     out
 }
 
-#[cfg(test)]
+/// Peaks closer than this (in bins, of 192) are one hit; farther apart they are two only when the rise
+/// between them dips below `HIT_VALLEY` of the lower peak, so a snare's broad plateau stays one hit while a
+/// kick and a snare landing together are two. Beyond `HIT_FAR` bins they are always two.
 const HIT_NEAR: usize = 10;
-#[cfg(test)]
 const HIT_FAR: usize = 60;
-#[cfg(test)]
 const HIT_VALLEY: f32 = 0.7;
 /// A hit is reported once its rise has stopped climbing (it reaches its height within about two analysis hops,
 /// so the first frame over the threshold understates it), or at the latest after this long.
-#[cfg(test)]
 const HIT_SETTLE_S: f64 = 0.015;
 /// One hit per position per this long, where a position is `HIT_NEAR_POS` of the line either side.
-#[cfg(test)]
 const HIT_REFRACTORY_S: f64 = 0.12;
-#[cfg(test)]
 const HIT_NEAR_POS: f32 = 0.12;
 /// Dense music is thinned to its hardest hits: every hit reported in the last `HIT_BUDGET_S` raises the
 /// strength the next one needs by `HIT_RAISE`.
 const HIT_BUDGET_S: f64 = 1.0;
-#[cfg(test)]
 const HIT_RAISE: f32 = 0.12;
 /// One event is at most this many hits: a snare is broadband, with a body, a noisy middle and a crack, and
 /// every part clears the threshold, but it is one event. Hits that start within `HIT_EVENT_S` of each other
 /// count as one event, and only its two strongest parts are reported (a kick and a snare landing together
 /// are still a pair).
-#[cfg(test)]
 const HIT_EVENT_MAX: usize = 2;
-#[cfg(test)]
 const HIT_EVENT_S: f64 = 0.06;
 /// A hit has to stand out from what its frequency is already doing: each bin's rise is judged after taking off
 /// `HIT_BG_K` times its own slow average (time constant `HIT_BG_TAU_S`). A sustained chord whose close partials
 /// beat inside the 21 ms analysis window makes the rise jitter all the time, at the very frequencies of the
 /// chord, and without this it detonated about twice a second; a drum rises far above its own background.
-#[cfg(test)]
 const HIT_BG_K: f32 = 2.0;
-#[cfg(test)]
 const HIT_BG_TAU_S: f32 = 0.6;
 
-#[cfg(test)]
 struct PendingHit {
     pos: f32,
     best: f32,
@@ -251,9 +239,7 @@ struct PendingHit {
 /// Finds hits in the normalized, tilted rise of the 192 bins (see `RiseNorm`): a peak along the bins that
 /// clears the fountain's threshold is one hit, reported once it has peaked and then held off for a refractory
 /// time at its position. Strength is measured above the fountain's threshold (`SPARK_START` to `SPARK_FULL`
-/// at the sensitivity), so the Sensitivity setting means the same thing here as it does there. Fireworks
-/// detonates a shell on each hit; a scene of lightning strikes would take the same events.
-#[cfg(test)]
+/// at the sensitivity). Fireworks uses these attacks for notes or percussion the drum model misses.
 pub struct RiseHits {
     pending: Vec<PendingHit>,
     /// Hits found lately as (position, time, whether it was reported), for the refractory time (which a hit the
@@ -269,14 +255,9 @@ pub struct RiseHits {
     bg_k: f32,
 }
 
-#[cfg(test)]
 impl RiseHits {
     pub fn new() -> RiseHits {
         RiseHits { pending: Vec::new(), recent: Vec::new(), starts: Vec::new(), background: Vec::new(), last: None, min_strength: HIT_MIN, bg_k: HIT_BG_K }
-    }
-
-    pub fn reset(&mut self) {
-        *self = RiseHits::new();
     }
 
     /// The peaks of `strength` per bin (0..2, see `update`) that clear `HIT_MIN`, strongest first, as (position, height).

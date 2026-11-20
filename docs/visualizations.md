@@ -63,24 +63,17 @@ freezes the flight, and hiding the window pauses it until the window reopens.
   2-6); **Motion** is how much the curtains fold and drift and how the lake stirs (0 holds the folds still; the
   columns still follow the music), **Flash** is the highlights that run up the rays.
 
-- **Fireworks** - rockets climb a dark sky while the music is loud, and a hit sets one off. Sustained energy
-  launches rockets from pads along a line (bass left, treble right, scattered in depth); a drum hit (see
-  **Drum detection** below) detonates the
-  rocket nearest its place on the line, at once and at the height it has reached, and with none near a mortar pops
-  low, so a hit is never unanswered. A rocket nobody sets off bursts at its apex, small and dim. Where the hit lands
-  sets the kind of burst: lows throw a **willow** (big, slow, heavy trails that droop to the floor), mids a
-  **peony** (an even sphere), highs a **crackle** (small, fast, twinkling). A harder hit is bigger, brighter and
-  throws more stars, and every star takes its colour from a frequency of the spectrum at the moment of
-  detonation, so a bassy hit throws warm stars and a bright one cool ones. The stars hang for three or four seconds,
-  cool toward ember orange and fall onto a glass floor that mirrors them and takes a pool of light under every
-  live burst. The sky is never full: a hit beyond seven live bursts is dropped and stars thin out as more are
-  alive. Silence stops launches, rockets in the air fizzle out and the stars expire. Display menu: **sensitivity**
-  and **density** (as for the Fountain; density scales the stars in each burst); **Motion** is how far the stars
-  drift on the wind and how far the camera wanders, **Flash** is the detonation flash and the light the bursts throw
-  on the floor (0 leaves bare stars).
+- **Fireworks** traces the spectrum with 24 comet trails above the glass. Bass is on the left and
+  treble on the right. A held note keeps its comet aloft, and a sharp attack makes it jump and brighten.
+  Detected drums burst immediately above their frequency. Kicks open into wide **willows**, snares into
+  round **peonies**, and hats into brief **crackles**. A strong note attack can open a smaller shell
+  when the drum detector hears no drum. Harder hits burst higher and throw more stars. In a fast passage,
+  each shell sheds fewer stars so the next beat stays visible. The trails settle and the sky clears in silence.
+  **Sensitivity** adjusts which drums and note attacks trigger shells. **Density** sets the number of
+  stars, **Motion** sets wind drift and camera movement, and **Flash** controls the central flash and floor light.
 
 - **Lightning Storm** - each hit strikes the glass floor as a bolt of branching light, where it landed on the line
-  (kicks on the left, snares in the middle, hats on the right; the same drum detector as the Fireworks, so **sensitivity** means the same).
+  (kicks on the left, snares in the middle, hats on the right; the **sensitivity** setting controls how confident the drum detector must be).
   Every bolt is built on the GPU from its own seed by midpoint displacement and drawn as thin glowing lines that are
   anti-aliased analytically: the first stroke runs down the channel in about 20 ms, one to three return strokes
   flicker (a harder hit flickers more), and a dim channel stays behind for a third of a second. Where the hit landed

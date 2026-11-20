@@ -1,16 +1,12 @@
-// The fireworks' floor, rockets and stars. The floor is the fountain's glossy dark glass with the spectrum line
-// the pads stand on; each live burst throws a radial pool of light on it. Rockets are thin rising streaks drawn
-// from a small table the CPU keeps (they are closed-form arcs, so it knows where each is at any moment). Stars
-// are the compute pass's particles, drawn as streaks whose length depends on the type of burst, and mirrored in
-// the glass.
+// Fireworks above the glass floor. The comets show the current spectrum, the stars and pools
+// mark drum hits. FwU mirrors the CPU table in fireworks.rs.
 const FLOOR_EXTENT: f32 = 600.0;
 const EMBER: vec3<f32> = vec3<f32>(1.0, 0.30, 0.05);
 
-// 16 rockets then 8 pools, two vec4 each:
-//   rocket: (position, brightness) (velocity, frequency)
+// 24 comets (log-frequency position, height, trail length, brightness), then 8 pools:
 //   pool:   (x, z, age, amplitude) (frequency, radius, life, unused)
 struct FwU {
-  shells: array<vec4<f32>, 32>,
+  comets: array<vec4<f32>, 24>,
   pools: array<vec4<f32>, 16>,
 };
 @group(1) @binding(2) var<uniform> fw: FwU;
@@ -50,7 +46,7 @@ struct FloorOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> 
   }
   c += lit * (0.55 * u.flash) * (0.7 + 0.8 * g);                 // the grid shows more where the glass is lit
 
-  // the spectrum line the pads stand on (bass left, treble right), and the light it throws on the glass
+  // the spectrum line beneath the comets (bass left, treble right), and the light it throws on the glass
   let half_w = 0.5 * u.ctl.y;
   if (abs(in.wp.z) < 1.6 && abs(in.wp.x) < half_w + 1.0) {
     let t = clamp(in.wp.x / u.ctl.y + 0.5, 0.0, 1.0);
@@ -64,25 +60,23 @@ struct FloorOut { @builtin(position) pos: vec4<f32>, @location(0) wp: vec3<f32> 
   return vec4<f32>(mix(BG, c, fade) * u.exposure, 1.0);
 }
 
-// ---- rockets
-fn shell_sprite(vi: u32, ii: u32, mirror: bool) -> SpriteOut {
-  let a = fw.shells[2u * ii];
-  let b = fw.shells[2u * ii + 1u];
-  if (a.w <= 0.0) { return sprite_dead(); }
-  var col = mix(vec3<f32>(1.0, 0.92, 0.75), palette(0.15, b.w), 0.30) * (1.5 * a.w);
-  if (mirror) {
-    let v = normalize(u.cam.xyz - a.xyz);
-    col *= (0.10 + 0.90 * pow(1.0 - clamp(abs(v.y), 0.0, 1.0), 3.0)) * exp(-0.35 * a.y) * 0.9;
-  }
-  return sprite_make_trail(a.xyz, b.xyz, 0.04, 0.16, vi, col, mirror);
+// ---- spectrum comets
+fn comet_sprite(vi: u32, ii: u32, mirror: bool) -> SpriteOut {
+  let c = fw.comets[ii];
+  if (c.w < 0.008) { return sprite_dead(); }
+  let head = vec3<f32>((c.x - 0.5) * u.ctl.y, c.y, 0.0);
+  let tail = vec3<f32>(0.0, c.z, 0.0);
+  var col = mix(palette(0.62 * c.x, c.x), vec3<f32>(1.0, 0.92, 0.8), 0.18 * min(c.w, 1.0)) * c.w;
+  if (mirror) { col *= 0.35 * exp(-0.35 * c.y); }
+  return sprite_make_trail(head, tail, 0.045 + 0.025 * min(c.w, 1.0), 1.0, vi, col, mirror);
 }
 
-@vertex fn vs_shell(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SpriteOut {
-  return shell_sprite(vi, ii, false);
+@vertex fn vs_comet(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SpriteOut {
+  return comet_sprite(vi, ii, false);
 }
 
-@vertex fn vs_shell_refl(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SpriteOut {
-  return shell_sprite(vi, ii, true);
+@vertex fn vs_comet_refl(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> SpriteOut {
+  return comet_sprite(vi, ii, true);
 }
 
 // ---- stars
@@ -119,15 +113,10 @@ fn star_colour(p: Particle, ii: u32) -> vec3<f32> {
   let col = mix(hot, EMBER, 0.75 * smoothstep(0.50, 1.0, age));
   // a star starts dim and lights up as the shell opens, so the detonation flash stays the brightest thing and
   // a thousand overlapping stars do not burn to a flat disc
-  let opening = 0.30 + 0.70 * smoothstep(0.0, 0.22, age * p.max_life);
+  let opening = 0.30 + 0.70 * smoothstep(0.0, 0.085, age * p.max_life);
   let fade = opening * clamp(p.life / (0.40 * p.max_life), 0.0, 1.0);
-  // a crackle's stars twinkle: a flicker by a per-star hash of the time, not child particles
-  var tw = 1.0;
-  if (kind > 1.5) {
-    let slot = floor(u.t * 14.0 + h * 9.0);
-    let r = f32(pcg(ii * 747796405u + u32(slot) * 2891336453u) >> 8u) * (1.0 / 16777216.0);
-    tw = 0.25 + 1.5 * r * r;
-  }
+  // Treble attacks glint off the short-lived crackles.
+  let tw = select(1.0, 0.75 + (0.35 + h) * u.fx.z, kind > 1.5);
   return col * p.look.z * fade * tw * (1.0 + 1.4 * splash);
 }
 
