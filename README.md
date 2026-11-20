@@ -106,3 +106,9 @@ All eight scenes below are captures from the running app. The built-in demo supp
 The analyzer listens before or after the EQ. An 8,192-sample FFT resolves the spectrum, while a 1,024-sample FFT tracks attacks every 10 ms. The drum detector distinguishes low drums, snares and hats or cymbals. Rust, egui and wgpu turn those signals into the window, particles, reflections and bloom. [Audio analysis and drum detection](docs/audio-analysis.md)
 
 For build commands, tests and reproducible screenshots, see the [developer guide](docs/development.md). To suggest a scene or report a bug, see [Contributing](CONTRIBUTING.md) or [open an issue](https://github.com/nathan-standafer/graphic-eq/issues/new/choose).
+
+## License
+
+You may redistribute and modify SpectraForgeEQ under the GNU General Public License as published by the Free Software Foundation, either version 3 or, at your option, any later version (`GPL-3.0-or-later`). [Full license text](LICENSE)
+
+The audio analysis guide documents the training source for the bundled drum detector and credits the external training materials. [Drum model provenance](docs/audio-analysis.md#drum-model-provenance)

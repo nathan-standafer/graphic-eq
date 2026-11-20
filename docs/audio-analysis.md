@@ -31,3 +31,11 @@ the labels carry the sound's timing, not your finger's. It can also show what th
 `gpu/tools/capture-song.sh`, then `cargo test --release propose_labels` / `eval_real` (`-- --ignored --nocapture`); labels live
 in `gpu/labels/` (the audio is not committed). See `gpu/labels/README.md`.
 
+## Drum model provenance
+
+The training record for the bundled detector describes 220 songs generated with the **TimGM6mb General MIDI soundfont**. The sequencer varied the drum patterns, instruments and mix, and supplied the exact time of each drum hit as a training label. The trainer used the resulting spectral features to fit five networks. The application embeds their weights and detection thresholds in `gpu/src/drum_model.bin` (SHA-256 `00d647035135428f1d3111bbe07e6522317c7ffa12760d9c644d6e74d1a5170e`). [Training record](../gpu/VISUALIZATION_PLAN.md#milestone-11-drum-detection-2026-10-14) · [Corpus generator](../gpu/src/corpus.rs) · [Trainer](../gpu/src/drum_train.rs)
+
+To render the training corpus on Debian or Linux Mint, the generator reads `/usr/share/sounds/sf2/TimGM6mb.sf2` from the separately installed `timgm6mb-soundfont` package. Its copyright notice credits Tim Brechbill (2004) and David Bolton (2010) and lists GPL version 2 for the soundfont. The full notice is in `/usr/share/doc/timgm6mb-soundfont/copyright`.
+
+The trainer also supports experiments with **MDB Drums** when `GEQ_REAL=1` is set and a local copy of the dataset is available. The dataset authors license their recordings and annotations under CC BY-NC-SA 4.0. Those files are distributed separately. [MDB Drums dataset and license](https://github.com/CarlSouthall/MDBDrums#license)
+
