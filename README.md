@@ -1,153 +1,108 @@
-<div align="center">
-  <img src="gpu/assets/spectraforgeeq.svg" width="88" height="88" alt="SpectraForgeEQ icon">
-  <h1>SpectraForgeEQ</h1>
-  <p><strong>Shape your sound. See every frequency.</strong></p>
-  <p>A system-wide equalizer and music-reactive visualizer for Linux Mint.</p>
-  <p>
-    <img src="https://img.shields.io/badge/EQ-11_bands-56dce6?style=flat-square" alt="11-band equalizer">
-    <img src="https://img.shields.io/badge/Visualizations-8_scenes-a78bfa?style=flat-square" alt="8 visualization scenes">
-    <img src="https://img.shields.io/badge/Built_with-Rust_%2B_wgpu-f19ac8?style=flat-square" alt="Built with Rust and wgpu">
-    <img src="https://img.shields.io/badge/Desktop-Linux_Mint_%2F_Cinnamon-91c66f?style=flat-square" alt="Linux Mint and Cinnamon">
-  </p>
-  <p><a href="#visualization-gallery">Explore the scenes</a> · <a href="#get-started">Install</a> · <a href="#make-it-yours">Controls</a> · <a href="docs/development.md">Developer guide</a></p>
-</div>
+<h1 align="center"><img src="gpu/assets/spectraforgeeq.svg" width="48" height="48" align="absmiddle" alt=""> SpectraForgeEQ</h1>
+<p align="center">A system-wide PipeWire equalizer and live music visualizer for Linux Mint Cinnamon.</p>
+<p align="center">
+  <a href="#get-started"><strong>Install on Linux Mint</strong></a> &nbsp;·&nbsp;
+  <a href="#visualization-gallery">Explore the eight scenes</a> &nbsp;·&nbsp;
+  <a href="docs/development.md">Developer guide</a>
+</p>
 
-![SpectraForgeEQ showing a neon spectrum waterfall above eleven illuminated equalizer faders](docs/images/hero.png)
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/images/fireworks-prism.webp">
+  <img src="docs/images/fireworks-live.webp" width="100%" alt="Fireworks in the Prism Finale look. Bass bursts spread across the left, snares open in the middle, and hi-hats sparkle on the right.">
+</picture>
 
-SpectraForgeEQ gives your desktop audio a set of illuminated hardware-style faders and a stage of its own. Tune eleven frequency bands, choose a visual look, and watch the music become glowing terrain, liquid metal, northern lights or ripples across a reflective pool.
-
-Built with **Rust, egui and wgpu**, with **PipeWire** doing the actual equalization. The visuals follow the audio; the EQ keeps working when you close the window.
-
-## Sound you control. A desktop app that stays out of the way.
-
-- **Eleven bands, ±12 dB.** From 40 Hz to 16 kHz, with half-decibel steps, ten EQ presets, and a custom setting.
-- **Faders that match your look.** Beveled illuminated handles, gain readouts and live signal meters follow the selected color scheme.
-- **Eight music-reactive scenes.** Spectrum levels, onsets and detected drum hits drive different parts of each scene.
-- **Your own visual mix.** Five color schemes, curated looks, favorites, crossfades, automatic cycling, and independent motion and flash controls.
-- **Ready when you log in.** An application-menu launcher and tray icon, with saved settings restored on startup.
-- **Quiet in the background.** Close the window to pause rendering and audio analysis while the equalizer continues. Quit explicitly to restore normal playback routing.
-
-## Visualization gallery
-
-Every image below is captured from the running app using its deterministic demo soundtrack. These are the actual renderers, with no mockups or post-processing.
-
-<table>
-<tr>
-<td width="50%">
-<h3>3D Columns</h3>
-<img src="docs/images/columns.png" alt="Eleven illuminated spectrum columns reflected in a glossy floor">
-<p>Glass housings, glowing LED cores and sparks that answer the beat.</p>
-</td>
-<td width="50%">
-<h3>Waterfall</h3>
-<img src="docs/images/waterfall.png" alt="Neon spectrum history forming a wireframe landscape beneath a starry sky">
-<p>A living history of the spectrum, drawn as terrain beneath a night sky.</p>
-</td>
-</tr>
-<tr>
-<td width="50%">
-<h3>Ferrofluid Orb</h3>
-<img src="docs/images/ferrofluid.png" alt="Reflective ferrofluid orb with frequency-driven spikes and eleven rounded floor spikes">
-<p>Liquid metal, elastic lobes and 192 fine spikes, surrounded by eleven rising floor spikes.</p>
-</td>
-<td width="50%">
-<h3>Aurora</h3>
-<img src="docs/images/aurora.png" alt="Layered aurora curtains mirrored across a dark lake">
-<p>Translucent curtains of spectrum light fold above a reflective lake.</p>
-</td>
-</tr>
-<tr>
-<td width="50%">
-<h3>Fountain</h3>
-<img src="docs/images/fountain.png" alt="Colored fountains of sparks rising from a line of frequency emitters">
-<p>Rising frequencies throw sparks into the air, then let them bounce and scatter.</p>
-</td>
-<td width="50%">
-<h3>Fireworks</h3>
-<img src="docs/images/fireworks.png" alt="Music-reactive fireworks bursting over a reflective floor">
-<p>Comets trace the notes from bass to treble. Drum hits ignite willows, peonies and crackles above them.</p>
-</td>
-</tr>
-<tr>
-<td width="50%">
-<h3>Lightning Storm</h3>
-<img src="docs/images/lightning.png" alt="Branching bolts of blue lightning striking and reflecting from a glass floor">
-<p>Branching strikes, return strokes and thunder rings follow the percussion.</p>
-</td>
-<td width="50%">
-<h3>Ripple Pond</h3>
-<img src="docs/images/ripple-pond.png" alt="Ripples and droplets bending the reflections of eleven illuminated frequency bars">
-<p>Each hit disturbs the water beneath eleven frequency-driven light bars.</p>
-</td>
-</tr>
-</table>
-
-[Explore how the scenes work →](docs/visualizations.md)
+**Fireworks · Prism Finale.** Follow the comets along the floor. A held note keeps its comet aloft. When the kick lands, a willow opens above the bass end of the line. Listen for the hi-hat and watch the small bursts on the right. [Download the eight-second demo with sound (MP4)](docs/media/fireworks-demo.mp4?raw=true)
 
 ## Get started
 
-**Designed for Linux Mint with Cinnamon and PipeWire.** Desktop integration has been tested on Linux Mint 22.3/Cinnamon. You need a Vulkan-capable GPU and a Rust toolchain with a C linker to build the app.
+On **Linux Mint 22.3 with Cinnamon**, you'll need PipeWire, a Vulkan-capable GPU, Python 3 and a Rust toolchain with a C linker. The installer checks the desktop dependencies and installs the app for your user.
 
 ```sh
 git clone https://github.com/nathan-standafer/graphic-eq.git
 cd graphic-eq
-
-# Download the locked dependencies, then build and install for your user.
 cargo fetch --manifest-path gpu/Cargo.toml --locked
 python3 packaging/install.py
 ```
 
-Open **SpectraForgeEQ** from your application menu. The installer adds the icon, launcher and login startup entry; it does not require `sudo`.
+Open **SpectraForgeEQ** from the application menu and play a track. Press **L** to pick a look, then **F** for full screen. Closing the window keeps the EQ running in the tray. Choose **Quit** from the tray to restore normal playback routing. [Requirements, startup options and removal](docs/installation.md)
 
-Runtime dependencies are PipeWire, `pipewire-pulse`, the PulseAudio utilities (`pactl` and `parec`), `pw-cli`, `pw-dump`, Python 3, PyGObject, GTK 3 and XApp. The installer checks these before installing. Rust is only needed to build, not to run the installed app.
+## Visualization gallery
 
-> **Already running a development copy?** Quit it before opening the installed app. Subsequent launches reopen the existing SpectraForgeEQ window.
+All eight scenes below are captures from the running app. The built-in demo supplies the same instruments to each one. Watch what a drum hit does to glass, water and light.
 
-[Installation, startup options and uninstall →](docs/installation.md)
+<table>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/fireworks.png" alt="Gold willow shells and comet trails over a dark glass floor">
+  <h3>Fireworks</h3>
+  <p>24 comets trace the spectrum. Kicks open broad willows, snares bloom into round peonies, and hats throw short crackles.</p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/ripple-pond.png" alt="Concentric ripples bending the reflections of violet light bars">
+  <h3>Ripple Pond</h3>
+  <p>A kick punches a crater in the water. Falling droplets send smaller rings through the reflections of eleven light bars.</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/waterfall.png" alt="Purple spectrum terrain receding beneath a ringed planet">
+  <h3>Waterfall</h3>
+  <p>The front edge is the spectrum right now. Each ridge behind it is an earlier instant, so a repeating rhythm leaves tracks across the glass.</p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/aurora.png" alt="Green curtains of spectral light reflected in a dark lake">
+  <h3>Aurora</h3>
+  <p>A note lifts one part of the nearest curtain, then echoes through the sheets behind it. Bass stirs the lake below.</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/ferrofluid.png" alt="A violet, mirror-finished orb covered in spikes above a ring of lights">
+  <h3>Ferrofluid Orb</h3>
+  <p>A rising pitch climbs a spiral of 192 spikes. Sustained bass swells the orb, and sharp attacks set its surface wobbling.</p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/fountain.png" alt="Blue and violet sparks arcing from frequency emitters along the floor">
+  <h3>Fountain</h3>
+  <p>A sudden rise throws sparks from that frequency's spot on the floor. Steeper attacks send them higher before they bounce.</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/columns.png" alt="Eleven illuminated LED columns shedding sparks from their peak caps">
+  <h3>3D Columns</h3>
+  <p>Eleven meters give you a direct read on the mix. A kick throws sparks from the bass columns, and an accented hat lights the treble end.</p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/lightning.png" alt="A blue lightning bolt striking a reflective grid">
+  <h3>Lightning Storm</h3>
+  <p>Low drums drive thick bolts into the glass. Higher hits split into thinner branches and leave a brief glow at the strike point.</p>
+</td>
+</tr>
+</table>
+
+[Scene-by-scene guide to sensitivity, particles, lighting and camera movement](docs/visualizations.md)
 
 ## Make it yours
 
+![The Waterfall scene above SpectraForgeEQ's eleven illuminated EQ faders](docs/images/hero.png)
+
+**Set the sound.** The eleven faders span **40 Hz to 16 kHz**, each with **±12 dB** of gain in half-decibel steps. Start with one of ten EQ presets or dial in your own. PipeWire routes playback through the EQ while your volume keys keep controlling your speakers or headphones.
+
+**Set the look.** Browse **30 looks** across the eight scenes, save favorites and cycle through them with crossfades. **Motion** controls movement and **Flash** controls transient lighting. For a slow flight around 3D Columns, Waterfall, Fountain or Fireworks, turn on **Display → Camera → Helicopter orbit**.
+
 | Control | Action |
-|---|---|
-| Drag an EQ fader | Adjust that frequency band |
-| Double-click a fader | Reset it to 0 dB |
-| EQ checkbox | Enable or bypass equalization |
-| `F` / `F11` | Toggle full screen |
-| `Esc` | Leave full screen |
-| `←` / `→` | Change scene |
-| `1`–`9` | Choose a visual preset from favorites or the catalog |
-| `L` | Open the look browser |
-| Drag / scroll / middle-drag | Orbit / zoom / pan |
+| --- | --- |
+| Drag an EQ fader / double-click it | Adjust the gain / reset that band to 0 dB |
+| EQ checkbox | Bypass or enable the equalizer |
+| **L** / **1**–**9** | Browse looks / select a favorite or catalog look |
+| **←** / **→** | Switch scenes |
+| **F** or **F11** / **Esc** | Toggle full screen / leave full screen |
+| Drag / scroll / middle-drag in the scene | Orbit / zoom / pan |
 | Double-click the scene | Reset the camera |
-
-The **Display** menu holds colors, glow, scene settings, favorites and automatic cycling. **Motion** and **Flash** are separate controls, so you can keep the spectrum moving while dialing back the effects.
-
-For **3D columns**, **Waterfall**, **Fountain** and **Fireworks**, enable **Display → Camera → Helicopter orbit** to fly around the scene. Adjust the orbit time from 20 to 180 seconds; each scene remembers its own choice. Drag or zoom to pause the flight briefly, or set **Motion** to zero to hold the view still.
-
-Click the **tray icon** to open the window. Right-click it for EQ enable/bypass, presets and Quit. Closing the window leaves the equalizer active; **Quit** stops it.
 
 ## Under the hood
 
-```text
-Desktop playback → PipeWire EQ → Your output device
-                                      │
-                               Audio analysis
-                                      │
-                          Rust + wgpu visualizations
-```
+The analyzer listens before or after the EQ. An 8,192-sample FFT resolves the spectrum, while a 1,024-sample FFT tracks attacks every 10 ms. The drum detector distinguishes low drums, snares and hats or cymbals. Rust, egui and wgpu turn those signals into the window, particles, reflections and bloom. [Audio analysis and drum detection](docs/audio-analysis.md)
 
-The virtual EQ output processes playback streams while your normal output remains the system default. Volume keys continue controlling your real output device. Frequency analysis and drum detection feed the scene renderers; the GPU handles geometry, particles, reflections and bloom.
-
-Settings are retained at `~/.config/graphic-eq/gpu-settings.json` for compatibility with earlier versions. The installed app is named **SpectraForgeEQ**; the source directory and development binary retain the `gpu` / `geq-gpu` names.
-
-## Explore the project
-
-| Guide | What you’ll find |
-|---|---|
-| [Installation](docs/installation.md) | Requirements, startup, CLI controls, upgrades and removal |
-| [Visualizations](docs/visualizations.md) | Scene behavior and tuning controls |
-| [Development](docs/development.md) | Build, tests, architecture and reproducible screenshots |
-| [Audio analysis](docs/audio-analysis.md) | Spectrum analysis, drum detection and evaluation limits |
-| [Contributing](CONTRIBUTING.md) | Useful bug reports and focused improvements |
-
-Found a problem or have a scene idea? [Open an issue](https://github.com/nathan-standafer/graphic-eq/issues/new/choose).
+For build commands, tests and reproducible screenshots, see the [developer guide](docs/development.md). To suggest a scene or report a bug, see [Contributing](CONTRIBUTING.md) or [open an issue](https://github.com/nathan-standafer/graphic-eq/issues/new/choose).
